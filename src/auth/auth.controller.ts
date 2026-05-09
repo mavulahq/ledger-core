@@ -13,12 +13,16 @@ export class AuthController {
     const tokens = await this.authService.login(user);
 
     if (process.env.USE_HTTP_ONLY_COOKIE === 'true') {
-      res.cookie('access_token', tokens.access_token, {
+      // Hardened cookie options for production
+      const cookieOptions: any = {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-      });
-      return { status: 'ok' };
+        sameSite: process.env.COOKIE_SAMESITE || 'lax',
+        maxAge: parseInt(process.env.COOKIE_MAX_AGE || '3600000', 10), // 1h default
+        domain: process.env.COOKIE_DOMAIN || undefined,
+      };
+      res.cookie('access_token', tokens.access_token, cookieOptions);
+      return { status: 'ok' }; // SPA should call /api/csrf-token if needed
     }
 
     return tokens;
