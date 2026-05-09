@@ -1,0 +1,18 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id        String  @id @default(cuid())
+  tenantId  String
+  name      String
+  balance   Decimal @default("0")
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+}
