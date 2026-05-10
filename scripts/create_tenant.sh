@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# getfluxo.io - Deployment & Infrastructure
+# Copyright (c) 2025 getfluxo.io
+# 
+# Author: Estandar Mustaq <estandarmustaq@getfluxo.io>
+# License: Proprietary
+
 set -euo pipefail
 
 TENANT_ID=${1:-inst_0001}

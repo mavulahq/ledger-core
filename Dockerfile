@@ -1,3 +1,7 @@
+# getfluxo.io - Docker Build Configuration
+# Copyright (c) 2025 getfluxo.io
+# License: Proprietary
+
 FROM node:20-alpine AS builder
 WORKDIR /usr/src/app
 COPY package.json pnpm-lock.yaml* ./

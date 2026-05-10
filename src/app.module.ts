@@ -1,3 +1,11 @@
+/*
+ * getfluxo.io - Core Finance Engine
+ * Copyright (c) 2025 getfluxo.io
+ * 
+ * Author: Estandar Mustaq <estandarmustaq@getfluxo.io>
+ * License: Proprietary - See LICENSE file
+ */
+
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';

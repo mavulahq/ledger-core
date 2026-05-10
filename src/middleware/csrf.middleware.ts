@@ -1,3 +1,11 @@
+/*
+ * getfluxo.io - Core Finance Engine
+ * Copyright (c) 2025 getfluxo.io
+ * 
+ * Author: Estandar Mustaq <estandarmustaq@getfluxo.io>
+ * License: Proprietary - See LICENSE file
+ */
+
 import { Request, Response } from 'express';
 import * as csurf from 'csurf';
 

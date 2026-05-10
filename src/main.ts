@@ -1,3 +1,11 @@
+/*
+ * getfluxo.io - Core Finance Engine
+ * Copyright (c) 2025 getfluxo.io
+ * 
+ * Author: Estandar Mustaq <estandarmustaq@getfluxo.io>
+ * License: Proprietary - See LICENSE file
+ */
+
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { TenantMiddleware } from './middleware/tenant.middleware';
