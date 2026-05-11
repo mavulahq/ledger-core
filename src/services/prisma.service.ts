@@ -1,9 +1,7 @@
 /*
  * getfluxo.io - Core Finance Engine
- * Copyright (c) 2025 getfluxo.io
- * 
- * Author: Estandar Mustaq <estandarmustaq@getfluxo.io>
- * License: Proprietary - See LICENSE file
+ * Copyright (c) 2026 getfluxo.io
+ * License: PROPRIETARY
  */
 
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';

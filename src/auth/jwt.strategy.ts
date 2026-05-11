@@ -1,9 +1,7 @@
 /*
  * getfluxo.io - Core Finance Engine
- * Copyright (c) 2025 getfluxo.io
- * 
- * Author: Estandar Mustaq <estandarmustaq@getfluxo.io>
- * License: Proprietary - See LICENSE file
+ * Copyright (c) 2026 getfluxo.io
+ * License: PROPRIETARY
  */
 
 import { Injectable } from '@nestjs/common';
@@ -16,7 +14,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: process.env.JWT_SECRET || 'change_me'
+      secretOrKey: process.env.JWT_SECRET || 'change_me',
     });
   }
 

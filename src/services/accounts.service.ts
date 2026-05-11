@@ -1,9 +1,7 @@
 /*
  * getfluxo.io - Core Finance Engine
- * Copyright (c) 2025 getfluxo.io
- * 
- * Author: Estandar Mustaq <estandarmustaq@getfluxo.io>
- * License: Proprietary - See LICENSE file
+ * Copyright (c) 2026 getfluxo.io
+ * License: PROPRIETARY
  */
 
 import { Injectable } from '@nestjs/common';
@@ -19,6 +17,8 @@ export class AccountsService {
   }
 
   async createAccount(tenantId: string, data: any) {
-    return this.prisma.account.create({ data: { tenantId, name: data.name || 'Unnamed', balance: data.balance || 0 } });
+    return this.prisma.account.create({
+      data: { tenantId, name: data.name || 'Unnamed', balance: data.balance || 0 },
+    });
   }
 }

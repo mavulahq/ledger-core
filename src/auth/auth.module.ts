@@ -1,9 +1,7 @@
 /*
  * getfluxo.io - Core Finance Engine
- * Copyright (c) 2025 getfluxo.io
- * 
- * Author: Estandar Mustaq <estandarmustaq@getfluxo.io>
- * License: Proprietary - See LICENSE file
+ * Copyright (c) 2026 getfluxo.io
+ * License: PROPRIETARY
  */
 
 import { Module } from '@nestjs/common';
@@ -14,9 +12,15 @@ import { JwtStrategy } from './jwt.strategy';
 import { AuthController } from './auth.controller';
 
 @Module({
-  imports: [PassportModule, JwtModule.register({ secret: process.env.JWT_SECRET || 'change_me', signOptions: { expiresIn: '1h' } })],
+  imports: [
+    PassportModule,
+    JwtModule.register({
+      secret: process.env.JWT_SECRET || 'change_me',
+      signOptions: { expiresIn: '1h' },
+    }),
+  ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
-  exports: [AuthService]
+  exports: [AuthService],
 })
 export class AuthModule {}

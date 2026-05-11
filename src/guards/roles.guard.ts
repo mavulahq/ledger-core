@@ -1,9 +1,7 @@
 /*
  * getfluxo.io - Core Finance Engine
- * Copyright (c) 2025 getfluxo.io
- * 
- * Author: Estandar Mustaq <estandarmustaq@getfluxo.io>
- * License: Proprietary - See LICENSE file
+ * Copyright (c) 2026 getfluxo.io
+ * License: PROPRIETARY
  */
 
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
@@ -23,6 +21,6 @@ export class RolesGuard implements CanActivate {
     const req = context.switchToHttp().getRequest();
     const user = req.user || {};
     const roles = user.roles || [];
-    return requiredRoles.some(r => roles.includes(r));
+    return requiredRoles.some((r) => roles.includes(r));
   }
 }

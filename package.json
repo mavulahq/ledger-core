@@ -7,7 +7,14 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "start:dev": "ts-node-dev --respawn --transpile-only src/main.ts",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand",
+    "test:e2e": "jest --config jest.e2e.config.js --runInBand",
+    "test:integration": "jest --testPathPattern=integration.spec.ts --runInBand",
+    "test:all": "jest --runInBand && jest --config jest.e2e.config.js --runInBand",
+    "test:financial": "jest --testPathPattern='(financial|loan|ledger|transaction|rules)' --runInBand",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",
@@ -25,19 +32,8 @@
     "prom-client": "^14.0.0",
     "cookie-parser": "^1.4.6",
     "csurf": "^1.11.0",
-    "supertest": "^6.3.3"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/main.js",
-    "start:dev": "ts-node-dev --respawn --transpile-only src/main.ts",
-    "test": "jest --runInBand",
-    "test:e2e": "jest --config jest.e2e.config.js --runInBand",
-    "test:integration": "jest --testPathPattern=integration.spec.ts --runInBand",
-    "test:all": "jest --runInBand && jest --config jest.e2e.config.js --runInBand",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "supertest": "^6.3.3",
+    "decimal.js": "^10.4.0"
   },
   "devDependencies": {
     "typescript": "^5.0.0",

@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # getfluxo.io - Schema Migration Tooling & Tenant Provisioning
-# Copyright (c) 2025 getfluxo.io
-# 
-# Author: Estandar Mustaq <estandarmustaq@getfluxo.io>
-# License: Proprietary
+# Copyright (c) 2026 getfluxo.io
+# License: PROPRIETARY
 
 set -euo pipefail
 
