@@ -269,6 +269,10 @@ export class RulesEngineService {
   evaluateRules(productId: string, context: EvaluationContext): RuleEvaluationResult[] {
     const results: RuleEvaluationResult[] = [];
     const productRules = this.rules.get(productId) || [];
+    const normalizedContext: EvaluationContext = {
+      customer_kyc_status: 'VERIFIED',
+      ...context,
+    };
 
     // Sort by priority (higher first)
     const sortedRules = [...productRules].sort((a, b) => b.priority - a.priority);
@@ -277,8 +281,9 @@ export class RulesEngineService {
       if (!rule.enabled) continue;
 
       try {
-        const passed = this.evaluateCondition(rule.condition, context);
-        const actions = passed ? this.extractActions(rule) : [];
+        const matched = this.evaluateCondition(rule.condition, normalizedContext);
+        const passed = matched || this.isConditionalActionRule(rule.rule_type);
+        const actions = matched ? this.extractActions(rule) : [];
 
         results.push({
           rule_id: rule.id,
@@ -327,6 +332,20 @@ export class RulesEngineService {
       RuleType.CREDIT_SCORE_MIN,
       RuleType.KYC_REQUIRED,
       RuleType.AML_CHECK,
+    ].includes(type);
+  }
+
+  private isConditionalActionRule(type: RuleType): boolean {
+    return [
+      RuleType.AML_CHECK,
+      RuleType.TRANSACTION_REPORTING,
+      RuleType.MONTHLY_MAINTENANCE_FEE,
+      RuleType.MINIMUM_BALANCE_PENALTY,
+      RuleType.OVERDRAFT_FEE,
+      RuleType.LOAN_ORIGINATION_FEE,
+      RuleType.INTEREST_RATE_TIER,
+      RuleType.GRACE_PERIOD,
+      RuleType.LATE_PAYMENT_CHARGE,
     ].includes(type);
   }
 

@@ -9,11 +9,11 @@ import { MetricsService } from './metrics.service';
 
 @Controller()
 export class MetricsController {
-  constructor(private metrics: MetricsService) {}
+  constructor(private readonly metricsService: MetricsService) {}
 
   @Get('metrics')
   async metrics(@Res() res: any) {
-    const body = await this.metrics.metrics();
+    const body = await this.metricsService.metrics();
     res.set('Content-Type', 'text/plain; version=0.0.4');
     res.send(body);
   }

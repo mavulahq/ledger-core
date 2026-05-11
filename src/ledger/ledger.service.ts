@@ -296,13 +296,14 @@ export class LedgerService {
       .filter(acc => acc.is_active)
       .map(acc => {
         const net = acc.balance_debit - acc.balance_credit;
+        const balanceType: 'DEBIT' | 'CREDIT' = net >= 0 ? 'DEBIT' : 'CREDIT';
         return {
           account_code: acc.account_code,
           account_name: acc.account_name,
           debit_total: net > 0 ? net : 0,
           credit_total: net < 0 ? Math.abs(net) : 0,
           balance: net,
-          balance_type: net >= 0 ? 'DEBIT' : 'CREDIT' as const,
+          balance_type: balanceType,
         };
       });
 

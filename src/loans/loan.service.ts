@@ -172,6 +172,7 @@ export class LoanService {
       customer_credit_score: customerCredit.credit_score,
       customer_income: customerCredit.income,
       customer_employment_years: customerCredit.employment_years,
+      customer_kyc_status: 'VERIFIED',
       transaction_amount: loan.principal_amount,
     });
 

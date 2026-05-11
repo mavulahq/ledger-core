@@ -12,6 +12,7 @@ import { csrfMiddleware, exposeCsrfToken } from './middleware/csrf.middleware';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const expressApp = app.getHttpAdapter().getInstance();
   app.setGlobalPrefix('api');
 
   // cookie parser for CSRF and cookie-based auth
@@ -24,7 +25,7 @@ async function bootstrap() {
     app.use(csrfMiddleware());
 
     // expose token endpoint
-    app.get('/api/csrf-token', (req, res) => {
+    expressApp.get('/api/csrf-token', (req: any, res: any) => {
       const token = exposeCsrfToken(req as any);
       res.json({ csrfToken: token });
     });
