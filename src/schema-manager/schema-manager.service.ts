@@ -10,6 +10,8 @@
  */
 
 import { Injectable } from '@nestjs/common';
+import { FengineStoreService } from '../services/fengine-store.service';
+import { AuditTrailService } from '../services/audit-trail.service';
 
 export interface FieldDefinition {
   name: string;
@@ -74,18 +76,23 @@ export class SchemaManagerService {
   private schemas: Map<string, CustomEntitySchema> = new Map();
   private workflows: Map<string, WorkflowDefinition> = new Map();
 
+  constructor(
+    private readonly store: FengineStoreService,
+    private readonly auditTrail: AuditTrailService,
+  ) {}
+
   /**
    * Create custom entity schema (no-code form builder result)
    * Institution defines: customer_profile, business_registration, collateral_valuation, etc.
    */
-  createEntitySchema(
+  async createEntitySchema(
     tenantId: string,
     entity: {
       entity_name: string;
       display_name: string;
       fields: FieldDefinition[];
     }
-  ): CustomEntitySchema {
+  ): Promise<CustomEntitySchema> {
     const schema: CustomEntitySchema = {
       entity_id: `ent_${entity.entity_name}_${Date.now()}`,
       tenant_id: tenantId,
@@ -97,6 +104,15 @@ export class SchemaManagerService {
     };
 
     this.schemas.set(schema.entity_id, schema);
+    await this.store.saveSchema(tenantId, schema);
+    this.auditTrail.record({
+      tenant_id: tenantId,
+      action: 'schema.created',
+      entity_type: 'schema',
+      entity_id: schema.entity_id,
+      phase: 'ACT',
+      metadata: { entity_name: schema.entity_name, field_count: schema.fields.length },
+    });
 
     // In production, would:
     // 1. Create table in PostgreSQL
@@ -111,7 +127,7 @@ export class SchemaManagerService {
   /**
    * Example: Create "Business Registration" form for loan applications
    */
-  createBusinessRegistrationSchema(tenantId: string): CustomEntitySchema {
+  createBusinessRegistrationSchema(tenantId: string): Promise<CustomEntitySchema> {
     return this.createEntitySchema(tenantId, {
       entity_name: 'business_registration',
       display_name: 'Business Registration Information',
@@ -186,14 +202,14 @@ export class SchemaManagerService {
    * Define custom workflow triggered by events
    * Example: When loan is approved, send SMS notification
    */
-  createWorkflow(
+  async createWorkflow(
     tenantId: string,
     workflow: {
       name: string;
       trigger: string;
       steps: WorkflowStep[];
     }
-  ): WorkflowDefinition {
+  ): Promise<WorkflowDefinition> {
     const wf: WorkflowDefinition = {
       workflow_id: `wf_${workflow.trigger}_${Date.now()}`,
       name: workflow.name,
@@ -203,15 +219,32 @@ export class SchemaManagerService {
     };
 
     this.workflows.set(wf.workflow_id, wf);
+    await this.store.saveWorkflow(tenantId, wf);
+    this.auditTrail.record({
+      tenant_id: tenantId,
+      action: 'workflow.created',
+      entity_type: 'workflow',
+      entity_id: wf.workflow_id,
+      phase: 'ACT',
+      metadata: { trigger: wf.trigger, steps: wf.steps.length },
+    });
 
     console.log(`✓ Workflow created: ${wf.workflow_id} (${wf.name})`);
     return wf;
   }
 
+  listEntitySchemas(tenantId: string): Promise<CustomEntitySchema[]> {
+    return this.store.listSchemas(tenantId);
+  }
+
+  listWorkflows(tenantId: string): Promise<WorkflowDefinition[]> {
+    return this.store.listWorkflows(tenantId);
+  }
+
   /**
    * Example workflow: On loan approval, notify customer
    */
-  createLoanApprovalNotificationWorkflow(tenantId: string): WorkflowDefinition {
+  createLoanApprovalNotificationWorkflow(tenantId: string): Promise<WorkflowDefinition> {
     return this.createWorkflow(tenantId, {
       name: 'Loan Approval Notification',
       trigger: 'LOAN_APPROVED',
@@ -273,7 +306,7 @@ export class SchemaManagerService {
   /**
    * Example workflow: Charge fees on scheduled dates
    */
-  createMonthlyFeeChargeWorkflow(tenantId: string): WorkflowDefinition {
+  createMonthlyFeeChargeWorkflow(tenantId: string): Promise<WorkflowDefinition> {
     return this.createWorkflow(tenantId, {
       name: 'Monthly Fee Charge',
       trigger: 'SCHEDULED_JOB_MONTHLY',
@@ -330,10 +363,8 @@ export class SchemaManagerService {
   /**
    * Get all workflows for event
    */
-  getWorkflowsByTrigger(tenantId: string, trigger: string): WorkflowDefinition[] {
-    return Array.from(this.workflows.values()).filter(
-      wf => wf.trigger === trigger && wf.enabled
-    );
+  getWorkflowsByTrigger(tenantId: string, trigger: string): Promise<WorkflowDefinition[]> {
+    return this.store.listWorkflowsByTrigger(tenantId, trigger);
   }
 
   /**
@@ -344,7 +375,8 @@ export class SchemaManagerService {
     workflowId: string,
     context: Record<string, any>
   ): Promise<{ success: boolean; results: any[] }> {
-    const workflow = this.workflows.get(workflowId);
+    const workflow = this.workflows.get(workflowId)
+      || (await this.store.listWorkflows(tenantId)).find((candidate) => candidate.workflow_id === workflowId);
     if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
 
     const results = [];
@@ -468,7 +500,7 @@ export class SchemaManagerService {
   /**
    * Import schema from JSON (for replication, backup)
    */
-  importSchema(tenantId: string, data: any): CustomEntitySchema {
+  importSchema(tenantId: string, data: any): Promise<CustomEntitySchema> {
     return this.createEntitySchema(tenantId, data);
   }
 }

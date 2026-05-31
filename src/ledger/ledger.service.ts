@@ -11,6 +11,8 @@
 
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../services/prisma.service';
+import { FengineStoreService } from '../services/fengine-store.service';
+import { AuditTrailService } from '../services/audit-trail.service';
 
 // Chart of Accounts - International standard structure
 export enum AccountClass {
@@ -87,12 +89,21 @@ export interface GeneralLedgerReport {
 
 @Injectable()
 export class LedgerService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private store: FengineStoreService,
+    private auditTrail: AuditTrailService,
+  ) {}
 
   /**
    * Initialize Chart of Accounts for tenant (SADC banking standard)
    */
   async initializeChartOfAccounts(tenantId: string): Promise<ChartOfAccounts[]> {
+    const existing = await this.store.listChartOfAccounts(tenantId);
+    if (existing.length > 0) {
+      return existing;
+    }
+
     const coa: ChartOfAccounts[] = [];
 
     // ASSET ACCOUNTS (10000-19999)
@@ -209,6 +220,15 @@ export class LedgerService {
       });
     }
 
+    await this.store.saveChartOfAccounts(tenantId, coa);
+    this.auditTrail.record({
+      tenant_id: tenantId,
+      action: 'ledger.chart.seeded',
+      entity_type: 'ledger_chart',
+      entity_id: tenantId,
+      phase: 'ACT',
+      metadata: { accounts: coa.length },
+    });
     console.log(`✓ Chart of Accounts initialized for tenant ${tenantId} (${coa.length} accounts)`);
     return coa;
   }
@@ -240,6 +260,18 @@ export class LedgerService {
 
     entry.status = 'POSTED';
     entry.posting_date = new Date();
+    await this.store.saveJournalEntry(tenantId, entry);
+    this.auditTrail.record({
+      tenant_id: tenantId,
+      action: 'ledger.entry.posted',
+      entity_type: 'journal_entry',
+      entity_id: entry.entry_id,
+      phase: 'ACT',
+      metadata: {
+        transaction_id: entry.transaction_id,
+        lines: entry.entries.length,
+      },
+    });
     console.log(`✓ Journal entry posted: ${entry.entry_id}`);
 
     return entry;
@@ -289,7 +321,6 @@ export class LedgerService {
    * Calculate Trial Balance (sum of all accounts)
    */
   async generateTrialBalance(tenantId: string, asOfDate: Date): Promise<TrialBalance> {
-    // In production, would query Prisma for all accounts
     const accounts = await this.initializeChartOfAccounts(tenantId);
 
     const trialBalanceItems = accounts
@@ -327,7 +358,30 @@ export class LedgerService {
     amount: number,
     type: 'DEBIT' | 'CREDIT'
   ): Promise<void> {
-    // In production, would update Prisma
+    const account = await this.store.getAccount(tenantId, accountCode);
+    if (!account) {
+      throw new Error(`Account ${accountCode} not found for tenant ${tenantId}`);
+    }
+
+    if (type === 'DEBIT') {
+      account.balance_debit += amount;
+    } else {
+      account.balance_credit += amount;
+    }
+
+    await this.store.saveAccount(tenantId, account);
     console.log(`  Update account ${accountCode}: ${type} ${amount}`);
+  }
+
+  listAccounts(tenantId: string): Promise<ChartOfAccounts[]> {
+    return this.store.listChartOfAccounts(tenantId);
+  }
+
+  getAccountDetails(tenantId: string, accountCode: string): Promise<ChartOfAccounts | undefined> {
+    return this.store.getAccount(tenantId, accountCode);
+  }
+
+  listEntries(tenantId: string): Promise<JournalEntry[]> {
+    return this.store.listJournalEntries(tenantId);
   }
 }

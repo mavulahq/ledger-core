@@ -13,6 +13,8 @@ import { RulesEngineService, RuleType } from '../src/rules-engine/rules-engine.s
 import { LedgerService, AccountClass } from '../src/ledger/ledger.service';
 import { ProductConfigService, ProductType } from '../src/products/product-config.service';
 import { PrismaService } from '../src/services/prisma.service';
+import { AuditTrailService } from '../src/services/audit-trail.service';
+import { FengineStoreService } from '../src/services/fengine-store.service';
 import {
   calculatePMT,
   getMonthlyRateFromAPR,
@@ -39,6 +41,8 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
         RulesEngineService,
         LedgerService,
         ProductConfigService,
+        FengineStoreService,
+        AuditTrailService,
         {
           provide: PrismaService,
           useValue: { /* mock Prisma */ },
@@ -85,7 +89,7 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     console.log('Evaluating business rules...\n');
 
     // Initialize default rules for product
-    const rules = rulesEngine.initializeDefaultRules(tenantId, productId);
+    const rules = await rulesEngine.initializeDefaultRules(tenantId, productId);
     expect(rules.length).toBeGreaterThan(10);
 
     console.log(`✓ Initialized ${rules.length} rules for product\n`);
@@ -103,7 +107,7 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     console.log(`  Employment: ${customerCredit.employment_years} years\n`);
 
     // Evaluate rules
-    const ruleResults = rulesEngine.evaluateRules(productId, {
+    const ruleResults = await rulesEngine.evaluateRules(productId, {
       customer_id: customerId,
       customer_credit_score: customerCredit.credit_score,
       customer_income: customerCredit.income,

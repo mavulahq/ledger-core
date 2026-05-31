@@ -29,6 +29,37 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.client.account;
   }
 
+  get db(): any {
+    if (!this.client) {
+      throw new Error('Prisma client not configured');
+    }
+
+    return this.client;
+  }
+
+  async ensureTenant(tenantId: string, data?: { name?: string; jurisdiction?: string }) {
+    if (!this.client) {
+      return;
+    }
+
+    await this.client.$executeRaw`
+      INSERT INTO "tenants" ("id", "name", "jurisdiction", "updatedAt")
+      VALUES (${tenantId}, ${data?.name || null}, ${data?.jurisdiction || null}, now())
+      ON CONFLICT ("id") DO UPDATE SET
+        "name" = COALESCE(EXCLUDED."name", "tenants"."name"),
+        "jurisdiction" = COALESCE(EXCLUDED."jurisdiction", "tenants"."jurisdiction"),
+        "updatedAt" = now()
+    `;
+  }
+
+  async setTenantContext(tenantId: string): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    await this.client.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, false)`;
+  }
+
   async onModuleInit() {
     if (!this.client) {
       return;

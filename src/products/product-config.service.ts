@@ -11,6 +11,8 @@
 
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../services/prisma.service';
+import { FengineStoreService } from '../services/fengine-store.service';
+import { AuditTrailService } from '../services/audit-trail.service';
 
 // Product types supported by getfluxo
 export enum ProductType {
@@ -112,7 +114,11 @@ export interface ComplianceRule {
 
 @Injectable()
 export class ProductConfigService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private store: FengineStoreService,
+    private auditTrail: AuditTrailService,
+  ) {}
 
   /**
    * Create or update auto-configurable product for tenant
@@ -123,7 +129,7 @@ export class ProductConfigService {
     productType: ProductType,
     config: Partial<ProductSchema>
   ): Promise<ProductSchema> {
-    const productId = `prod_${productType.toLowerCase()}_${Date.now()}`;
+    const productId = config.product_id || `prod_${productType.toLowerCase()}_${Date.now()}`;
     
     // Default configurations by product type
     const defaults = this.getDefaultProductConfig(productType);
@@ -131,9 +137,19 @@ export class ProductConfigService {
     
     // Store in PostgreSQL (tenant schema)
     // In production, would use Prisma to persist to tenant_{id}.products table
+    const product = merged as ProductSchema;
+    await this.store.saveProduct(tenantId, product);
+    this.auditTrail.record({
+      tenant_id: tenantId,
+      action: 'product.upserted',
+      entity_type: 'product',
+      entity_id: productId,
+      phase: 'ACT',
+      metadata: { productType, enabled: product.enabled },
+    });
+
     console.log(`✓ Product created: ${productId} for tenant ${tenantId}`);
-    
-    return merged as ProductSchema;
+    return product;
   }
 
   /**
@@ -154,7 +170,7 @@ export class ProductConfigService {
       products.push(product);
     }
 
-    return {
+    const tenantConfig = {
       tenant_id: tenantId,
       products,
       fees_schedule: this.generateDefaultFeeSchedule(tenantId, products),
@@ -163,6 +179,30 @@ export class ProductConfigService {
       compliance_rules: this.generateComplianceRules(jurisdiction),
       created_at: new Date(),
     };
+
+    await this.store.saveTenantConfig(tenantConfig);
+    this.auditTrail.record({
+      tenant_id: tenantId,
+      action: 'tenant.config.generated',
+      entity_type: 'tenant_config',
+      entity_id: tenantId,
+      phase: 'ACT',
+      metadata: { jurisdiction, product_count: products.length },
+    });
+
+    return tenantConfig;
+  }
+
+  listProducts(tenantId: string): Promise<ProductSchema[]> {
+    return this.store.listProducts(tenantId);
+  }
+
+  getProduct(tenantId: string, productId: string): Promise<ProductSchema | undefined> {
+    return this.store.getProduct(tenantId, productId);
+  }
+
+  getTenantConfig(tenantId: string): Promise<TenantConfigSchema | undefined> {
+    return this.store.getTenantConfig(tenantId);
   }
 
   /**

@@ -8,11 +8,205 @@ datasource db {
 }
 
 model Account {
-  id        String  @id @default(cuid())
+  id        String   @id @default(cuid())
   tenantId  String
   name      String
-  balance   Decimal @default("0")
+  balance   Decimal  @default("0")
   createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
+  @@map("accounts")
+}
+
+model Tenant {
+  id              String               @id
+  name            String?
+  jurisdiction    String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  accounts        Account[]
+  products        Product[]
+  tenantConfigs   TenantConfig[]
+  loans           Loan[]
+  transactions    FinancialTransaction[]
+  ledgerAccounts  LedgerAccount[]
+  journalEntries  JournalEntry[]
+  schemas         CustomEntitySchema[]
+  workflows       WorkflowDefinition[]
+  rules           Rule[]
+  auditTrail      AuditTrailEvent[]
+
+  @@map("tenants")
+}
+
+model Product {
+  id        String   @id
+  tenantId  String
+  type      String
+  name      String
+  enabled   Boolean  @default(true)
+  config    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@unique([tenantId, id])
+  @@map("products")
+}
+
+model TenantConfig {
+  id        String   @id @default(cuid())
+  tenantId  String
+  config    Json
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("tenant_configs")
+}
+
+model Loan {
+  id        String   @id
+  tenantId  String
+  customerId String
+  productId String
+  status    String
+  data      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, customerId])
+  @@unique([tenantId, id])
+  @@map("loans")
+}
+
+model FinancialTransaction {
+  id        String   @id
+  tenantId  String
+  type      String
+  status    String
+  amount    Decimal
+  currency  String
+  loanId    String?
+  data      Json
+  createdAt DateTime @default(now())
+  postedAt  DateTime?
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, loanId])
+  @@unique([tenantId, id])
+  @@map("financial_transactions")
+}
+
+model LedgerAccount {
+  id             String   @id @default(cuid())
+  tenantId       String
+  accountCode    String
+  accountName    String
+  accountClass   String
+  accountSubclass String
+  balanceDebit   Decimal  @default("0")
+  balanceCredit  Decimal  @default("0")
+  currency       String
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@unique([tenantId, accountCode])
+  @@map("ledger_accounts")
+}
+
+model JournalEntry {
+  id            String   @id
+  tenantId      String
+  transactionId String
+  description   String
+  postedBy      String
+  status        String
+  entryDate     DateTime
+  postingDate   DateTime
+  lines         Json
+  metadata      Json
+  createdAt     DateTime @default(now())
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, transactionId])
+  @@unique([tenantId, id])
+  @@map("journal_entries")
+}
+
+model CustomEntitySchema {
+  id          String   @id
+  tenantId    String
+  entityName  String
+  displayName String
+  fields      Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@unique([tenantId, id])
+  @@map("custom_entity_schemas")
+}
+
+model WorkflowDefinition {
+  id        String   @id
+  tenantId  String
+  name      String
+  trigger   String
+  steps     Json
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, trigger])
+  @@unique([tenantId, id])
+  @@map("workflow_definitions")
+}
+
+model Rule {
+  id        String   @id
+  tenantId  String
+  productId String
+  ruleType  String
+  condition String
+  action    Json
+  priority  Int
+  enabled   Boolean  @default(true)
+  appliesTo Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, productId])
+  @@unique([tenantId, id])
+  @@map("rules")
+}
+
+model AuditTrailEvent {
+  id         String   @id
+  tenantId   String
+  action     String
+  entityType String
+  entityId   String
+  phase      String?
+  actorId    String?
+  metadata   Json
+  createdAt  DateTime @default(now())
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, entityType, entityId])
+  @@map("audit_trail_events")
 }

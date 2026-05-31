@@ -14,6 +14,8 @@ import { PrismaService } from '../services/prisma.service';
 import { LedgerService } from '../ledger/ledger.service';
 import { RulesEngineService } from '../rules-engine/rules-engine.service';
 import { allocatePayment } from '../calculations/financial-calculations';
+import { AuditTrailService } from '../services/audit-trail.service';
+import { FengineStoreService } from '../services/fengine-store.service';
 
 export enum TransactionType {
   DEPOSIT = 'DEPOSIT',              // Money in
@@ -79,7 +81,9 @@ export class TransactionService {
   constructor(
     private prisma: PrismaService,
     private ledger: LedgerService,
-    private rulesEngine: RulesEngineService
+    private rulesEngine: RulesEngineService,
+    private auditTrail: AuditTrailService,
+    private store: FengineStoreService,
   ) {}
 
   /**
@@ -94,6 +98,10 @@ export class TransactionService {
     paymentAmount: number;
     currency: string;
     productId: string;
+    principalDue: number;
+    interestDue: number;
+    feesDue: number;
+    currentBalance: number;
   }): Promise<SettlementResult> {
     const txnId = `txn_${params.loanId}_${Date.now()}`;
 
@@ -104,10 +112,12 @@ export class TransactionService {
       }
 
       // Step 2: Evaluate rules (OODA: Evaluate rules before acting)
-      const ruleResults = this.rulesEngine.evaluateRules(params.productId, {
+      const ruleResults = await this.rulesEngine.evaluateRules(params.productId, {
+        tenant_id: params.tenantId,
         customer_id: params.customerId,
         transaction_amount: params.paymentAmount,
         transaction_type: TransactionType.LOAN_PAYMENT,
+        stage: 'PAYMENT',
       });
 
       // Step 3: Check if any critical rule failed
@@ -118,16 +128,12 @@ export class TransactionService {
 
       // Step 4: Allocate payment (principal, interest, fees)
       // In production, would fetch loan details from database
-      const interestDue = 1000;  // Example
-      const principalDue = 4500; // Example
-      const feesDue = 0;
-
       const allocation = allocatePayment({
         payment_amount: params.paymentAmount,
-        interest_due: interestDue,
-        principal_due: principalDue,
-        fees_due: feesDue,
-        current_balance: 50000,  // Example
+        interest_due: params.interestDue,
+        principal_due: params.principalDue,
+        fees_due: params.feesDue,
+        current_balance: params.currentBalance,
       });
 
       // Step 5: Record in General Ledger
@@ -144,6 +150,37 @@ export class TransactionService {
       // Step 6: Update customer account
       // In production: UPDATE accounts SET balance = balance - principal WHERE id = account_id
       console.log(`✓ Payment processed: ${txnId} (Principal: ${allocation.principal_payment}, Interest: ${allocation.interest_payment})`);
+
+      await this.store.saveTransaction(params.tenantId, {
+        id: txnId,
+        tenant_id: params.tenantId,
+        transaction_type: TransactionType.LOAN_PAYMENT,
+        status: TransactionStatus.POSTED,
+        from_account_id: params.accountId,
+        amount: params.paymentAmount,
+        currency: params.currency,
+        loan_id: params.loanId,
+        principal_payment: allocation.principal_payment,
+        interest_payment: allocation.interest_payment,
+        fee_payment: allocation.fee_payment,
+        rule_results: ruleResults,
+        created_at: new Date(),
+        posted_at: new Date(),
+        created_by: 'SYSTEM',
+        metadata: { customer_id: params.customerId },
+      });
+      this.auditTrail.record({
+        tenant_id: params.tenantId,
+        action: 'transaction.payment.posted',
+        entity_type: 'transaction',
+        entity_id: txnId,
+        phase: 'ACT',
+        metadata: {
+          loan_id: params.loanId,
+          payment_amount: params.paymentAmount,
+          allocation,
+        },
+      });
 
       return {
         transaction_id: txnId,
@@ -189,6 +226,7 @@ export class TransactionService {
         created_by: 'SYSTEM',
         metadata: { customer_id: params.customerId },
       };
+      await this.store.saveTransaction(params.tenantId, txn);
 
       // Record GL entry
       // DEBIT: 11100 (Loan Portfolio)
@@ -209,6 +247,18 @@ export class TransactionService {
       });
 
       console.log(`✓ Disbursement processed: ${txnId} (Principal: ${params.principal})`);
+      this.auditTrail.record({
+        tenant_id: params.tenantId,
+        action: 'transaction.disbursement.posted',
+        entity_type: 'transaction',
+        entity_id: txnId,
+        phase: 'ACT',
+        metadata: {
+          customer_id: params.customerId,
+          principal: params.principal,
+          origination_fee: params.originationFee,
+        },
+      });
 
       return {
         transaction_id: txnId,
@@ -272,6 +322,14 @@ export class TransactionService {
    */
   async reverseTransaction(tenantId: string, transactionId: string): Promise<SettlementResult> {
     console.log(`Reversing transaction: ${transactionId}`);
+    this.auditTrail.record({
+      tenant_id: tenantId,
+      action: 'transaction.reversed',
+      entity_type: 'transaction',
+      entity_id: transactionId,
+      phase: 'ACT',
+      metadata: {},
+    });
 
     // In production, would create offsetting GL entries
     return {
@@ -290,5 +348,9 @@ export class TransactionService {
       error,
       timestamp: new Date(),
     };
+  }
+
+  listTransactions(tenantId: string): Promise<Transaction[]> {
+    return this.store.listTransactions(tenantId);
   }
 }

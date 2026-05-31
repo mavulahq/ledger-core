@@ -1,21 +1,112 @@
--- RLS and schema-per-tenant setup (run as superuser or owner)
--- This script creates a tenant schema, moves tables during migration and sets RLS policies as examples.
+-- getfluxo.io fengine tenant isolation baseline.
+-- Run after Prisma creates the shared-schema tables.
+-- Runtime code must set app.current_tenant_id on each DB transaction/session.
 
--- Example: create schema for tenant
-CREATE SCHEMA IF NOT EXISTS tenant_inst_0001 AUTHORIZATION CURRENT_USER;
+CREATE OR REPLACE FUNCTION public.set_current_tenant(tenant_id text)
+RETURNS void AS $$
+BEGIN
+  PERFORM set_config('app.current_tenant_id', tenant_id, true);
+END;
+$$ LANGUAGE plpgsql;
 
--- Example: create accounts table inside tenant schema (initial)
-CREATE TABLE IF NOT EXISTS tenant_inst_0001.accounts (
-  id text PRIMARY KEY,
-  name text NOT NULL,
-  balance numeric DEFAULT 0,
-  created_at timestamptz DEFAULT now()
-);
+CREATE OR REPLACE FUNCTION public.current_tenant_id()
+RETURNS text AS $$
+BEGIN
+  RETURN NULLIF(current_setting('app.current_tenant_id', true), '');
+END;
+$$ LANGUAGE plpgsql STABLE;
 
--- Example: Add RLS policy on a shared table in public schema (if using shared schema)
--- This is an example; prefer schema-per-tenant for stronger isolation
--- ALTER TABLE public.accounts ENABLE ROW LEVEL SECURITY;
--- CREATE POLICY tenant_isolation ON public.accounts USING (tenant_id = current_setting('app.current_tenant_id', true));
+ALTER TABLE public.accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tenant_configs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.loans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.financial_transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ledger_accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.journal_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.custom_entity_schemas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.workflow_definitions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_trail_events ENABLE ROW LEVEL SECURITY;
 
--- Note: For zero-downtime, create new nullable columns, backfill, add NOT VALID constraints, then set NOT NULL.
--- See migration runbook for patterns
+ALTER TABLE public.accounts FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.products FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.tenant_configs FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.loans FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.financial_transactions FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.ledger_accounts FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.journal_entries FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.custom_entity_schemas FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.workflow_definitions FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.rules FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_trail_events FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tenant_isolation_accounts ON public.accounts;
+CREATE POLICY tenant_isolation_accounts ON public.accounts
+  USING ("tenantId" = public.current_tenant_id())
+  WITH CHECK ("tenantId" = public.current_tenant_id());
+
+DROP POLICY IF EXISTS tenant_isolation_products ON public.products;
+CREATE POLICY tenant_isolation_products ON public.products
+  USING ("tenantId" = public.current_tenant_id())
+  WITH CHECK ("tenantId" = public.current_tenant_id());
+
+DROP POLICY IF EXISTS tenant_isolation_tenant_configs ON public.tenant_configs;
+CREATE POLICY tenant_isolation_tenant_configs ON public.tenant_configs
+  USING ("tenantId" = public.current_tenant_id())
+  WITH CHECK ("tenantId" = public.current_tenant_id());
+
+DROP POLICY IF EXISTS tenant_isolation_loans ON public.loans;
+CREATE POLICY tenant_isolation_loans ON public.loans
+  USING ("tenantId" = public.current_tenant_id())
+  WITH CHECK ("tenantId" = public.current_tenant_id());
+
+DROP POLICY IF EXISTS tenant_isolation_financial_transactions ON public.financial_transactions;
+CREATE POLICY tenant_isolation_financial_transactions ON public.financial_transactions
+  USING ("tenantId" = public.current_tenant_id())
+  WITH CHECK ("tenantId" = public.current_tenant_id());
+
+DROP POLICY IF EXISTS tenant_isolation_ledger_accounts ON public.ledger_accounts;
+CREATE POLICY tenant_isolation_ledger_accounts ON public.ledger_accounts
+  USING ("tenantId" = public.current_tenant_id())
+  WITH CHECK ("tenantId" = public.current_tenant_id());
+
+DROP POLICY IF EXISTS tenant_isolation_journal_entries ON public.journal_entries;
+CREATE POLICY tenant_isolation_journal_entries ON public.journal_entries
+  USING ("tenantId" = public.current_tenant_id())
+  WITH CHECK ("tenantId" = public.current_tenant_id());
+
+DROP POLICY IF EXISTS tenant_isolation_custom_entity_schemas ON public.custom_entity_schemas;
+CREATE POLICY tenant_isolation_custom_entity_schemas ON public.custom_entity_schemas
+  USING ("tenantId" = public.current_tenant_id())
+  WITH CHECK ("tenantId" = public.current_tenant_id());
+
+DROP POLICY IF EXISTS tenant_isolation_workflow_definitions ON public.workflow_definitions;
+CREATE POLICY tenant_isolation_workflow_definitions ON public.workflow_definitions
+  USING ("tenantId" = public.current_tenant_id())
+  WITH CHECK ("tenantId" = public.current_tenant_id());
+
+DROP POLICY IF EXISTS tenant_isolation_rules ON public.rules;
+CREATE POLICY tenant_isolation_rules ON public.rules
+  USING ("tenantId" = public.current_tenant_id())
+  WITH CHECK ("tenantId" = public.current_tenant_id());
+
+DROP POLICY IF EXISTS tenant_isolation_audit_trail_events ON public.audit_trail_events;
+CREATE POLICY tenant_isolation_audit_trail_events ON public.audit_trail_events
+  USING ("tenantId" = public.current_tenant_id())
+  WITH CHECK ("tenantId" = public.current_tenant_id());
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fengine_app') THEN
+    CREATE ROLE fengine_app LOGIN PASSWORD 'fengine_dev';
+  END IF;
+END;
+$$;
+
+ALTER ROLE fengine_app NOBYPASSRLS;
+GRANT CONNECT ON DATABASE getfluxo TO fengine_app;
+GRANT USAGE ON SCHEMA public TO fengine_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO fengine_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO fengine_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO fengine_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO fengine_app;

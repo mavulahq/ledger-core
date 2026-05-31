@@ -10,6 +10,10 @@
  */
 
 import { Injectable } from '@nestjs/common';
+import { AuditTrailService } from '../services/audit-trail.service';
+import { FengineStoreService } from '../services/fengine-store.service';
+
+export type OODAStage = 'ORIGINATION' | 'PAYMENT' | 'DISBURSEMENT' | 'CONFIGURATION' | 'MONITORING';
 
 export enum RuleType {
   // Eligibility rules
@@ -49,6 +53,7 @@ export interface Rule {
   action: Record<string, any>;  // Parameters for action
   priority: number;          // Higher = more important (evaluated first)
   enabled: boolean;
+  applies_to?: OODAStage[];
   created_at: Date;
   updated_at: Date;
 }
@@ -68,6 +73,7 @@ export interface EvaluationContext {
   transaction_amount?: number;
   transaction_type?: string;
   transaction_date?: Date;
+  stage?: OODAStage;
   
   [key: string]: any;
 }
@@ -84,10 +90,15 @@ export interface RuleEvaluationResult {
 export class RulesEngineService {
   private rules: Map<string, Rule[]> = new Map();
 
+  constructor(
+    private readonly auditTrail: AuditTrailService,
+    private readonly store: FengineStoreService,
+  ) {}
+
   /**
    * Initialize rules for tenant (SADC banking standards)
    */
-  initializeDefaultRules(tenantId: string, productId: string): Rule[] {
+  async initializeDefaultRules(tenantId: string, productId: string): Promise<Rule[]> {
     const rules: Rule[] = [];
 
     // ELIGIBILITY RULES
@@ -100,6 +111,7 @@ export class RulesEngineService {
       action: { reject: false, min_score: 300 },
       priority: 10,
       enabled: true,
+      applies_to: ['ORIGINATION'],
       created_at: new Date(),
       updated_at: new Date(),
     });
@@ -113,6 +125,7 @@ export class RulesEngineService {
       action: { require_kyc: true },
       priority: 15,
       enabled: true,
+      applies_to: ['ORIGINATION', 'DISBURSEMENT'],
       created_at: new Date(),
       updated_at: new Date(),
     });
@@ -127,6 +140,7 @@ export class RulesEngineService {
       action: { max_amount: 50000 },
       priority: 8,
       enabled: true,
+      applies_to: ['ORIGINATION'],
       created_at: new Date(),
       updated_at: new Date(),
     });
@@ -140,6 +154,7 @@ export class RulesEngineService {
       action: { daily_limit: 500000 },
       priority: 7,
       enabled: true,
+      applies_to: ['PAYMENT', 'DISBURSEMENT'],
       created_at: new Date(),
       updated_at: new Date(),
     });
@@ -154,6 +169,7 @@ export class RulesEngineService {
       action: { fee_amount: 50, frequency: 'MONTHLY' },
       priority: 5,
       enabled: true,
+      applies_to: ['MONITORING', 'PAYMENT'],
       created_at: new Date(),
       updated_at: new Date(),
     });
@@ -167,6 +183,7 @@ export class RulesEngineService {
       action: { penalty_fee: 100 },
       priority: 6,
       enabled: true,
+      applies_to: ['MONITORING', 'PAYMENT'],
       created_at: new Date(),
       updated_at: new Date(),
     });
@@ -180,6 +197,7 @@ export class RulesEngineService {
       action: { fee_percent: 2.0 },  // 2% of loan amount
       priority: 9,
       enabled: true,
+      applies_to: ['ORIGINATION', 'DISBURSEMENT'],
       created_at: new Date(),
       updated_at: new Date(),
     });
@@ -200,6 +218,7 @@ export class RulesEngineService {
       },
       priority: 4,
       enabled: true,
+      applies_to: ['ORIGINATION'],
       created_at: new Date(),
       updated_at: new Date(),
     });
@@ -213,6 +232,7 @@ export class RulesEngineService {
       action: { grace_months: 3 },
       priority: 3,
       enabled: true,
+      applies_to: ['ORIGINATION'],
       created_at: new Date(),
       updated_at: new Date(),
     });
@@ -226,6 +246,7 @@ export class RulesEngineService {
       action: { charge_percent: 5.0 },  // 5% of payment if late
       priority: 2,
       enabled: true,
+      applies_to: ['PAYMENT', 'MONITORING'],
       created_at: new Date(),
       updated_at: new Date(),
     });
@@ -240,6 +261,7 @@ export class RulesEngineService {
       action: { require_aml: true },
       priority: 20,
       enabled: true,
+      applies_to: ['ORIGINATION', 'DISBURSEMENT', 'PAYMENT'],
       created_at: new Date(),
       updated_at: new Date(),
     });
@@ -253,11 +275,13 @@ export class RulesEngineService {
       action: { report_to_regulator: true },
       priority: 1,
       enabled: true,
+      applies_to: ['ORIGINATION', 'DISBURSEMENT', 'PAYMENT'],
       created_at: new Date(),
       updated_at: new Date(),
     });
 
     this.rules.set(productId, rules);
+    await this.store.saveRules(tenantId, productId, rules);
     console.log(`✓ Initialized ${rules.length} rules for product ${productId}`);
 
     return rules;
@@ -266,9 +290,11 @@ export class RulesEngineService {
   /**
    * Evaluate all rules for transaction
    */
-  evaluateRules(productId: string, context: EvaluationContext): RuleEvaluationResult[] {
+  async evaluateRules(productId: string, context: EvaluationContext): Promise<RuleEvaluationResult[]> {
     const results: RuleEvaluationResult[] = [];
-    const productRules = this.rules.get(productId) || [];
+    const tenantId = context.tenant_id || process.env.APP_CURRENT_TENANT || 'public';
+    const productRules = this.rules.get(productId) || await this.store.listRules(productId, tenantId);
+    this.rules.set(productId, productRules);
     const normalizedContext: EvaluationContext = {
       customer_kyc_status: 'VERIFIED',
       ...context,
@@ -279,6 +305,9 @@ export class RulesEngineService {
 
     for (const rule of sortedRules) {
       if (!rule.enabled) continue;
+      if (normalizedContext.stage && rule.applies_to?.length && !rule.applies_to.includes(normalizedContext.stage)) {
+        continue;
+      }
 
       try {
         const matched = this.evaluateCondition(rule.condition, normalizedContext);
@@ -301,6 +330,21 @@ export class RulesEngineService {
       } catch (error) {
         console.error(`Error evaluating rule ${rule.id}:`, error);
       }
+    }
+
+    if (context.customer_id) {
+      this.auditTrail.record({
+        tenant_id: tenantId,
+        action: 'rules.evaluated',
+        entity_type: 'rules',
+        entity_id: productId,
+        phase: 'ORIENT',
+        metadata: {
+          stage: normalizedContext.stage || 'UNSPECIFIED',
+          passed: results.filter((item) => item.passed).length,
+          failed: results.filter((item) => !item.passed).length,
+        },
+      });
     }
 
     return results;
@@ -352,39 +396,52 @@ export class RulesEngineService {
   /**
    * Add custom rule for specific product
    */
-  addRule(tenantId: string, rule: Rule): void {
+  async addRule(tenantId: string, rule: Rule): Promise<void> {
     if (!this.rules.has(rule.product_id)) {
       this.rules.set(rule.product_id, []);
     }
     this.rules.get(rule.product_id)!.push(rule);
+    await this.store.saveRule(tenantId, rule);
+    this.auditTrail.record({
+      tenant_id: tenantId,
+      action: 'rule.created',
+      entity_type: 'rule',
+      entity_id: rule.id,
+      phase: 'ACT',
+      metadata: { product_id: rule.product_id, rule_type: rule.rule_type },
+    });
   }
 
   /**
    * Update rule
    */
-  updateRule(productId: string, ruleId: string, updates: Partial<Rule>): void {
+  async updateRule(productId: string, ruleId: string, updates: Partial<Rule>): Promise<void> {
     const rules = this.rules.get(productId) || [];
     const idx = rules.findIndex(r => r.id === ruleId);
     if (idx >= 0) {
       rules[idx] = { ...rules[idx], ...updates, updated_at: new Date() };
+      await this.store.saveRule(rules[idx].tenant_id, rules[idx]);
     }
   }
 
   /**
    * Delete rule
    */
-  deleteRule(productId: string, ruleId: string): void {
+  async deleteRule(productId: string, ruleId: string): Promise<void> {
     const rules = this.rules.get(productId) || [];
     this.rules.set(
       productId,
       rules.filter(r => r.id !== ruleId)
     );
+    await this.store.deleteRule(productId, ruleId);
   }
 
   /**
    * Get all rules for product
    */
-  getRules(productId: string): Rule[] {
-    return this.rules.get(productId) || [];
+  async getRules(productId: string, tenantId?: string): Promise<Rule[]> {
+    const rules = this.rules.get(productId) || await this.store.listRules(productId, tenantId);
+    this.rules.set(productId, rules);
+    return rules;
   }
 }

@@ -12,11 +12,14 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../services/prisma.service';
 import { TransactionService } from '../transactions/transaction.service';
-import { RulesEngineService } from '../rules-engine/rules-engine.service';
+import { OODAStage, RulesEngineService } from '../rules-engine/rules-engine.service';
+import { ProductConfigService } from '../products/product-config.service';
+import { AuditTrailService } from '../services/audit-trail.service';
+import { FengineStoreService } from '../services/fengine-store.service';
 import {
+  allocatePayment,
   calculatePMT,
   generateAmortizationSchedule,
-  validateLoanParameters,
   generateLoanScenarios,
   getMonthlyRateFromAPR,
 } from '../calculations/financial-calculations';
@@ -116,7 +119,10 @@ export class LoanService {
   constructor(
     private prisma: PrismaService,
     private transactionService: TransactionService,
-    private rulesEngine: RulesEngineService
+    private rulesEngine: RulesEngineService,
+    private productConfigService: ProductConfigService,
+    private auditTrail: AuditTrailService,
+    private store: FengineStoreService,
   ) {}
 
   /**
@@ -124,6 +130,22 @@ export class LoanService {
    */
   async applyForLoan(tenantId: string, application: LoanApplication): Promise<Loan> {
     const loanId = `loan_${application.customer_id}_${Date.now()}`;
+    const product = await this.productConfigService.getProduct(tenantId, application.product_id);
+
+    if (product) {
+      if (product.min_principal && application.requested_amount < product.min_principal) {
+        throw new Error(`Requested amount below product minimum of ${product.min_principal}`);
+      }
+      if (product.max_principal && application.requested_amount > product.max_principal) {
+        throw new Error(`Requested amount above product maximum of ${product.max_principal}`);
+      }
+      if (product.min_term_months && application.requested_term_months < product.min_term_months) {
+        throw new Error(`Requested term below product minimum of ${product.min_term_months} months`);
+      }
+      if (product.max_term_months && application.requested_term_months > product.max_term_months) {
+        throw new Error(`Requested term above product maximum of ${product.max_term_months} months`);
+      }
+    }
 
     const loan: Loan = {
       id: loanId,
@@ -137,9 +159,9 @@ export class LoanService {
       monthly_rate: 0,
       annual_rate: 0,
       interest_method: 'SIMPLE',
-      origination_fee_percent: 2.0,
+      origination_fee_percent: product?.origination_fee || 2.0,
       origination_fee_amount: 0,
-      late_payment_fee_percent: 5.0,
+      late_payment_fee_percent: product?.late_payment_fee || 5.0,
       monthly_payment: 0,
       total_interest: 0,
       total_repayable: 0,
@@ -154,6 +176,20 @@ export class LoanService {
       updated_at: new Date(),
     };
 
+    await this.store.saveLoan(tenantId, loan);
+    this.auditTrail.record({
+      tenant_id: tenantId,
+      action: 'loan.applied',
+      entity_type: 'loan',
+      entity_id: loanId,
+      phase: 'OBSERVE',
+      metadata: {
+        customer_id: loan.customer_id,
+        principal: loan.principal_amount,
+        term_months: loan.term_months,
+      },
+    });
+
     console.log(`✓ Loan application created: ${loanId}`);
     return loan;
   }
@@ -167,13 +203,15 @@ export class LoanService {
     customerCredit: { credit_score: number; income: number; employment_years: number }
   ): Promise<LoanApprovalResult> {
     // Evaluate rules
-    const ruleResults = this.rulesEngine.evaluateRules(loan.product_id, {
+    const ruleResults = await this.rulesEngine.evaluateRules(loan.product_id, {
+      tenant_id: tenantId,
       customer_id: loan.customer_id,
       customer_credit_score: customerCredit.credit_score,
       customer_income: customerCredit.income,
       customer_employment_years: customerCredit.employment_years,
       customer_kyc_status: 'VERIFIED',
       transaction_amount: loan.principal_amount,
+      stage: 'ORIGINATION' satisfies OODAStage,
     });
 
     const passed = ruleResults.filter(r => r.passed).length;
@@ -187,12 +225,17 @@ export class LoanService {
     const approved = criticalRulesFailed.length === 0 && passed > failed;
 
     if (approved) {
-      // Calculate interest rate based on credit score
-      const rateAdjustment = (800 - customerCredit.credit_score) * 0.0001;  // Tier by score
-      const baseRate = 0.025;  // 2.5% base
-      const monthlyRate = baseRate + rateAdjustment;
+      const product = await this.productConfigService.getProduct(tenantId, loan.product_id);
+      const tierRule = ruleResults.find((result) => result.rule_type === 'INTEREST_RATE_TIER');
+      const tierRate = tierRule?.actions.find((action) => action.action === 'tiers')?.value;
+      const baseRatePercent = product?.default_interest_rate || 2.5;
+      const tieredRatePercent = Array.isArray(tierRate)
+        ? tierRate.find((tier: any) => loan.principal_amount >= tier.min && loan.principal_amount <= tier.max)?.rate
+        : undefined;
+      const monthlyRate = (tieredRatePercent || baseRatePercent) / 100;
+      const graceRule = ruleResults.find((result) => result.rule_type === 'GRACE_PERIOD');
+      const graceMonths = Number(graceRule?.actions.find((action) => action.action === 'grace_months')?.value || 0);
 
-      // Calculate monthly payment
       const monthlyPayment = calculatePMT(
         loan.principal_amount,
         monthlyRate,
@@ -206,13 +249,38 @@ export class LoanService {
       loan.total_interest = monthlyPayment * loan.term_months - loan.principal_amount;
       loan.total_repayable = monthlyPayment * loan.term_months;
       loan.origination_fee_amount = loan.principal_amount * (loan.origination_fee_percent / 100);
+      loan.grace_months = graceMonths;
       loan.approval_date = new Date();
       loan.updated_at = new Date();
+      await this.store.saveLoan(tenantId, loan);
+      this.auditTrail.record({
+        tenant_id: tenantId,
+        action: 'loan.approved',
+        entity_type: 'loan',
+        entity_id: loan.id,
+        phase: 'DECIDE',
+        metadata: {
+          monthly_rate: loan.monthly_rate,
+          monthly_payment: loan.monthly_payment,
+          grace_months: loan.grace_months,
+        },
+      });
 
       console.log(`✓ Loan approved: ${loan.id} (Monthly: ${monthlyPayment.toFixed(2)}, Rate: ${(monthlyRate * 100).toFixed(2)}%)`);
     } else {
       loan.status = LoanStatus.REJECTED;
       loan.updated_at = new Date();
+      await this.store.saveLoan(tenantId, loan);
+      this.auditTrail.record({
+        tenant_id: tenantId,
+        action: 'loan.rejected',
+        entity_type: 'loan',
+        entity_id: loan.id,
+        phase: 'DECIDE',
+        metadata: {
+          failed_rules: ruleResults.filter((result) => !result.passed).map((result) => result.rule_type),
+        },
+      });
       console.log(`✗ Loan rejected: ${loan.id} (Failed rules: ${failed})`);
     }
 
@@ -255,6 +323,18 @@ export class LoanService {
       loan.maturity_date = new Date();
       loan.maturity_date.setMonth(loan.maturity_date.getMonth() + loan.term_months);
       loan.updated_at = new Date();
+      await this.store.saveLoan(tenantId, loan);
+      this.auditTrail.record({
+        tenant_id: tenantId,
+        action: 'loan.disbursed',
+        entity_type: 'loan',
+        entity_id: loan.id,
+        phase: 'ACT',
+        metadata: {
+          transaction_id: result.transaction_id,
+          amount: loan.disbursed_amount,
+        },
+      });
 
       console.log(`✓ Loan disbursed: ${loan.id} (Amount: ${loan.principal_amount})`);
 
@@ -298,10 +378,13 @@ export class LoanService {
     }
 
     // Calculate interest due
-    const monthsSinceLastPayment = 1;  // Simplified
-    const interestDue = loan.remaining_balance * loan.monthly_rate * monthsSinceLastPayment;
+    const schedule = this.generateAmortizationSchedule(loan);
+    const nextInstallment =
+      schedule.find((item) => item.closing_balance < loan.remaining_balance + 0.0001) || schedule[0];
+    const interestDue = nextInstallment?.interest || loan.remaining_balance * loan.monthly_rate;
+    const principalDue = nextInstallment?.principal || Math.max(paymentAmount - interestDue, 0);
+    const feeDue = loan.total_paid_fees === 0 ? loan.origination_fee_amount : 0;
 
-    // Process payment through transaction service
     const result = await this.transactionService.processPayment({
       tenantId,
       customerId: loan.customer_id,
@@ -310,25 +393,52 @@ export class LoanService {
       paymentAmount,
       currency: 'MZN',
       productId: loan.product_id,
+      principalDue,
+      interestDue,
+      feesDue: feeDue,
+      currentBalance: loan.remaining_balance,
     });
 
     if (result.posting_status === 'SUCCESS') {
-      // Update loan
-      const principalPaid = Math.min(paymentAmount - interestDue, loan.remaining_balance);
+      const allocation = allocatePayment({
+        payment_amount: paymentAmount,
+        interest_due: interestDue,
+        principal_due: principalDue,
+        fees_due: feeDue,
+        current_balance: loan.remaining_balance,
+      });
+      const principalPaid = allocation.principal_payment;
+      const interestPaid = allocation.interest_payment;
+      const feePaid = allocation.fee_payment;
       loan.total_paid_principal += principalPaid;
-      loan.total_paid_interest += interestDue;
-      loan.remaining_balance -= principalPaid;
+      loan.total_paid_interest += interestPaid;
+      loan.total_paid_fees += feePaid;
+      loan.remaining_balance = allocation.balance_after;
       loan.updated_at = new Date();
 
-      // Check if paid up
       if (loan.remaining_balance <= 0) {
         loan.status = LoanStatus.PAID_UP;
       }
+      await this.store.saveLoan(tenantId, loan);
+      this.auditTrail.record({
+        tenant_id: tenantId,
+        action: 'loan.payment.recorded',
+        entity_type: 'loan',
+        entity_id: loan.id,
+        phase: 'ACT',
+        metadata: {
+          payment_amount: paymentAmount,
+          principal_paid: principalPaid,
+          interest_paid: interestPaid,
+          fee_paid: feePaid,
+          remaining_balance: loan.remaining_balance,
+        },
+      });
 
       return {
         success: true,
         principal_paid: principalPaid,
-        interest_paid: interestDue,
+        interest_paid: interestPaid,
         balance_remaining: Math.max(loan.remaining_balance, 0),
       };
     }
@@ -390,5 +500,13 @@ export class LoanService {
       progress_percent: progressPercent,
       maturity_date: loan.maturity_date,
     };
+  }
+
+  listLoans(tenantId: string): Promise<Loan[]> {
+    return this.store.listLoans(tenantId);
+  }
+
+  getLoan(tenantId: string, loanId: string): Promise<Loan | undefined> {
+    return this.store.getLoan(tenantId, loanId);
   }
 }

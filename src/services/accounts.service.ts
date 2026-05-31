@@ -18,7 +18,14 @@ export class AccountsService {
       return this.memoryAccounts.get(tenantId) || [];
     }
 
-    return this.prisma.account.findMany({ where: { tenantId } });
+    await this.prisma.ensureTenant(tenantId);
+    await this.prisma.setTenantContext(tenantId);
+    return this.prisma.db.$queryRaw`
+      SELECT "id", "tenantId", "name", "balance", "createdAt"
+      FROM "accounts"
+      WHERE "tenantId" = ${tenantId}
+      ORDER BY "createdAt" ASC
+    `;
   }
 
   async createAccount(tenantId: string, data: any) {
@@ -35,8 +42,14 @@ export class AccountsService {
       return account;
     }
 
-    return this.prisma.account.create({
-      data: { tenantId, name: data.name || 'Unnamed', balance: data.balance || 0 },
-    });
+    await this.prisma.ensureTenant(tenantId);
+    await this.prisma.setTenantContext(tenantId);
+    const id = `acct_${Date.now()}`;
+    const [account] = await this.prisma.db.$queryRaw<any[]>`
+      INSERT INTO "accounts" ("id", "tenantId", "name", "balance")
+      VALUES (${id}, ${tenantId}, ${data.name || 'Unnamed'}, ${data.balance || 0})
+      RETURNING "id", "tenantId", "name", "balance", "createdAt"
+    `;
+    return account;
   }
 }
