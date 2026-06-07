@@ -186,6 +186,64 @@ describe('fengine - Integration Tests (app composition)', () => {
       const result = await workflowsController.execute({ tenantId }, workflow.workflow_id, { context: {} });
       expect(result.success).toBe(true);
     });
+
+    it('executes workflow conditions and formulas without dynamic code evaluation', async () => {
+      const workflow = await workflowsController.create(
+        { tenantId },
+        {
+          name: 'Safe Runtime Workflow',
+          trigger: 'SAFE_RUNTIME_TEST',
+          steps: [
+            {
+              order: 1,
+              name: 'Calculate fee',
+              action: 'CALCULATE',
+              parameters: { formula: 'amount * rate + fee' },
+              condition: 'amount >= 100 && customer.status == "ACTIVE"',
+            },
+            {
+              order: 2,
+              name: 'Skipped branch',
+              action: 'LOG_EVENT',
+              parameters: { event_type: 'SHOULD_SKIP', severity: 'INFO' },
+              condition: 'amount < 10',
+            },
+          ],
+        },
+      );
+
+      const result = await workflowsController.execute(
+        { tenantId },
+        workflow.workflow_id,
+        { context: { amount: 200, rate: 0.1, fee: 5, customer: { status: 'ACTIVE' } } },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].data).toBe(25);
+    });
+
+    it('rejects unsupported workflow formula syntax', async () => {
+      const workflow = await workflowsController.create(
+        { tenantId },
+        {
+          name: 'Unsafe Runtime Workflow',
+          trigger: 'UNSAFE_RUNTIME_TEST',
+          steps: [
+            {
+              order: 1,
+              name: 'Unsupported formula',
+              action: 'CALCULATE',
+              parameters: { formula: 'process.exit()' },
+            },
+          ],
+        },
+      );
+
+      await expect(
+        workflowsController.execute({ tenantId }, workflow.workflow_id, { context: {} }),
+      ).rejects.toThrow('Invalid formula');
+    });
   });
 
   describe('RBAC', () => {
