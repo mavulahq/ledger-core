@@ -10,7 +10,7 @@ import { RulesController } from '../src/controllers/rules.controller';
 import { SchemasController } from '../src/controllers/schemas.controller';
 import { WorkflowsController } from '../src/controllers/workflows.controller';
 import { ProductType } from '../src/products/product-config.service';
-import { RuleType } from '../src/rules-engine/rules-engine.service';
+import { RulesEngineService, RuleType } from '../src/rules-engine/rules-engine.service';
 import { TenantMiddleware } from '../src/middleware/tenant.middleware';
 import { exposeCsrfToken } from '../src/middleware/csrf.middleware';
 
@@ -22,6 +22,7 @@ describe('fengine - Integration Tests (app composition)', () => {
   let accountsController: AccountsController;
   let productsController: ProductsController;
   let rulesController: RulesController;
+  let rulesEngine: RulesEngineService;
   let schemasController: SchemasController;
   let workflowsController: WorkflowsController;
   const tenantId = 'test_inst_001';
@@ -41,6 +42,7 @@ describe('fengine - Integration Tests (app composition)', () => {
     accountsController = app.get(AccountsController);
     productsController = app.get(ProductsController);
     rulesController = app.get(RulesController);
+    rulesEngine = app.get(RulesEngineService);
     schemasController = app.get(SchemasController);
     workflowsController = app.get(WorkflowsController);
   });
@@ -158,6 +160,63 @@ describe('fengine - Integration Tests (app composition)', () => {
       expect(rule.id).toBe('rule_api_min_score');
       expect(rules.some((item) => item.id === 'rule_api_min_score')).toBe(true);
     });
+
+    it('evaluates custom rules with the safe expression runtime', async () => {
+      await rulesController.create(
+        { tenantId },
+        'prod_api_loan',
+        {
+          id: 'rule_api_safe_runtime',
+          rule_type: RuleType.MAX_LOAN_AMOUNT,
+          condition: '(customer_credit_score >= 500 && percent(customer_income, 25) >= transaction_amount) || customer_kyc_status === "VIP"',
+          action: { approve: true },
+          priority: 20,
+          applies_to: ['ORIGINATION'],
+        },
+      );
+
+      const results = await rulesEngine.evaluateRules('prod_api_loan', {
+        tenant_id: tenantId,
+        customer_id: 'cust_safe_runtime',
+        customer_credit_score: 620,
+        customer_income: 120000,
+        customer_kyc_status: 'VERIFIED',
+        transaction_amount: 25000,
+        stage: 'ORIGINATION',
+      });
+
+      const safeRule = results.find((item) => item.rule_id === 'rule_api_safe_runtime');
+      expect(safeRule?.passed).toBe(true);
+      expect(safeRule?.actions).toEqual([{ action: 'approve', value: true }]);
+    });
+
+    it('does not execute unsupported custom rule expressions', async () => {
+      await rulesController.create(
+        { tenantId },
+        'prod_api_loan',
+        {
+          id: 'rule_api_unsafe_runtime',
+          rule_type: RuleType.CREDIT_SCORE_MIN,
+          condition: 'process.exit()',
+          action: { reject: true },
+          priority: 30,
+          applies_to: ['ORIGINATION'],
+        },
+      );
+
+      const results = await rulesEngine.evaluateRules('prod_api_loan', {
+        tenant_id: tenantId,
+        customer_id: 'cust_unsafe_runtime',
+        customer_credit_score: 620,
+        customer_kyc_status: 'VERIFIED',
+        transaction_amount: 25000,
+        stage: 'ORIGINATION',
+      });
+
+      const unsafeRule = results.find((item) => item.rule_id === 'rule_api_unsafe_runtime');
+      expect(unsafeRule?.passed).toBe(false);
+      expect(unsafeRule?.actions).toEqual([]);
+    });
   });
 
   describe('No-code Schemas and Workflows API', () => {
@@ -198,7 +257,7 @@ describe('fengine - Integration Tests (app composition)', () => {
               order: 1,
               name: 'Calculate fee',
               action: 'CALCULATE',
-              parameters: { formula: 'amount * rate + fee' },
+              parameters: { formula: 'round(max(amount * rate, minimum_fee) + fee - discount + pow(multiplier, 2), 2)' },
               condition: 'amount >= 100 && customer.status == "ACTIVE"',
             },
             {
@@ -215,12 +274,22 @@ describe('fengine - Integration Tests (app composition)', () => {
       const result = await workflowsController.execute(
         { tenantId },
         workflow.workflow_id,
-        { context: { amount: 200, rate: 0.1, fee: 5, customer: { status: 'ACTIVE' } } },
+        {
+          context: {
+            amount: 200,
+            rate: 0.1,
+            minimum_fee: 10,
+            fee: 5,
+            discount: 3,
+            multiplier: 2,
+            customer: { status: 'ACTIVE' },
+          },
+        },
       );
 
       expect(result.success).toBe(true);
       expect(result.results).toHaveLength(1);
-      expect(result.results[0].data).toBe(25);
+      expect(result.results[0].data).toBe(26);
     });
 
     it('rejects unsupported workflow formula syntax', async () => {

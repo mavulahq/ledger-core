@@ -12,6 +12,7 @@
 import { Injectable } from '@nestjs/common';
 import { FengineStoreService } from '../services/fengine-store.service';
 import { AuditTrailService } from '../services/audit-trail.service';
+import { evaluateBooleanExpression, evaluateNumericExpression } from '../utils/safe-expression-evaluator';
 
 export interface FieldDefinition {
   name: string;
@@ -472,204 +473,13 @@ export class SchemaManagerService {
     params: Record<string, any>,
     context: Record<string, any>
   ): Promise<{ success: boolean; data: any }> {
-    const result = this.evaluateFormula(String(params.formula || ''), context);
+    const result = evaluateNumericExpression(String(params.formula || ''), context);
     console.log(`    Calculated: ${params.formula} = ${result}`);
     return { success: true, data: result };
   }
 
   private evaluateCondition(condition: string, context: Record<string, any>): boolean {
-    const expression = condition.trim();
-    if (!expression) {
-      return true;
-    }
-
-    for (const orPart of expression.split('||')) {
-      const andParts = orPart.split('&&').map((part) => part.trim()).filter(Boolean);
-      if (andParts.length && andParts.every((part) => this.evaluateConditionPart(part, context))) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  private evaluateConditionPart(part: string, context: Record<string, any>): boolean {
-    const match = part.match(/^(.+?)\s*(===|!==|>=|<=|==|!=|>|<)\s*(.+)$/);
-    if (!match) {
-      return Boolean(this.resolveOperand(part, context));
-    }
-
-    const left = this.resolveOperand(match[1], context);
-    const right = this.resolveOperand(match[3], context);
-
-    switch (match[2]) {
-      case '===':
-      case '==':
-        return left === right;
-      case '!==':
-      case '!=':
-        return left !== right;
-      case '>':
-        return Number(left) > Number(right);
-      case '<':
-        return Number(left) < Number(right);
-      case '>=':
-        return Number(left) >= Number(right);
-      case '<=':
-        return Number(left) <= Number(right);
-      default:
-        return false;
-    }
-  }
-
-  private evaluateFormula(formula: string, context: Record<string, any>): number {
-    const tokens = this.tokenizeFormula(formula);
-    const output: Array<string | number> = [];
-    const operators: string[] = [];
-    const precedence: Record<string, number> = { '+': 1, '-': 1, '*': 2, '/': 2 };
-
-    for (const token of tokens) {
-      if (typeof token === 'number') {
-        output.push(token);
-      } else if (this.isPathToken(token)) {
-        output.push(Number(this.resolvePath(context, token) || 0));
-      } else if (token in precedence) {
-        while (
-          operators.length &&
-          operators[operators.length - 1] !== '(' &&
-          precedence[operators[operators.length - 1]] >= precedence[token]
-        ) {
-          output.push(operators.pop()!);
-        }
-        operators.push(token);
-      } else if (token === '(') {
-        operators.push(token);
-      } else if (token === ')') {
-        while (operators.length && operators[operators.length - 1] !== '(') {
-          output.push(operators.pop()!);
-        }
-        if (operators.pop() !== '(') {
-          throw new Error(`Invalid formula: ${formula}`);
-        }
-      } else {
-        throw new Error(`Unsupported formula token: ${token}`);
-      }
-    }
-
-    while (operators.length) {
-      const operator = operators.pop()!;
-      if (operator === '(') {
-        throw new Error(`Invalid formula: ${formula}`);
-      }
-      output.push(operator);
-    }
-
-    const stack: number[] = [];
-    for (const token of output) {
-      if (typeof token === 'number') {
-        stack.push(token);
-        continue;
-      }
-
-      const right = stack.pop();
-      const left = stack.pop();
-      if (left === undefined || right === undefined) {
-        throw new Error(`Invalid formula: ${formula}`);
-      }
-
-      switch (token) {
-        case '+':
-          stack.push(left + right);
-          break;
-        case '-':
-          stack.push(left - right);
-          break;
-        case '*':
-          stack.push(left * right);
-          break;
-        case '/':
-          stack.push(right === 0 ? 0 : left / right);
-          break;
-        default:
-          throw new Error(`Unsupported operator: ${token}`);
-      }
-    }
-
-    if (stack.length !== 1 || Number.isNaN(stack[0])) {
-      throw new Error(`Invalid formula: ${formula}`);
-    }
-
-    return Number(stack[0].toFixed(2));
-  }
-
-  private tokenizeFormula(formula: string): Array<string | number> {
-    const tokens: Array<string | number> = [];
-    const source = formula.trim();
-    let index = 0;
-
-    while (index < source.length) {
-      const char = source[index];
-      if (/\s/.test(char)) {
-        index += 1;
-        continue;
-      }
-
-      const numberMatch = source.slice(index).match(/^\d+(\.\d+)?/);
-      if (numberMatch) {
-        tokens.push(Number(numberMatch[0]));
-        index += numberMatch[0].length;
-        continue;
-      }
-
-      const pathMatch = source.slice(index).match(/^[A-Za-z_][A-Za-z0-9_.]*/);
-      if (pathMatch) {
-        if (source[index + pathMatch[0].length] === '(') {
-          throw new Error(`Invalid formula: ${formula}`);
-        }
-        tokens.push(pathMatch[0]);
-        index += pathMatch[0].length;
-        continue;
-      }
-
-      if ('+-*/()'.includes(char)) {
-        tokens.push(char);
-        index += 1;
-        continue;
-      }
-
-      throw new Error(`Unsupported formula token at position ${index}`);
-    }
-
-    return tokens;
-  }
-
-  private resolveOperand(raw: string, context: Record<string, any>): any {
-    const value = raw.trim();
-    if (value === 'true') return true;
-    if (value === 'false') return false;
-    if (value === 'null') return null;
-    if (value === 'undefined') return undefined;
-    if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      return value.slice(1, -1);
-    }
-    if (!this.isPathToken(value)) {
-      throw new Error(`Unsupported condition operand: ${value}`);
-    }
-    return this.resolvePath(context, value);
-  }
-
-  private resolvePath(context: Record<string, any>, path: string): any {
-    return path.split('.').reduce((current, key) => {
-      if (current === undefined || current === null) {
-        return undefined;
-      }
-      return current[key];
-    }, context as any);
-  }
-
-  private isPathToken(value: string): boolean {
-    return /^[A-Za-z_][A-Za-z0-9_.]*$/.test(value);
+    return evaluateBooleanExpression(condition, context);
   }
 
   private isCriticalStep(step: WorkflowStep): boolean {

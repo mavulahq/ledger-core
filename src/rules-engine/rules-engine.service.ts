@@ -12,6 +12,7 @@
 import { Injectable } from '@nestjs/common';
 import { AuditTrailService } from '../services/audit-trail.service';
 import { FengineStoreService } from '../services/fengine-store.service';
+import { evaluateBooleanExpression } from '../utils/safe-expression-evaluator';
 
 export type OODAStage = 'ORIGINATION' | 'PAYMENT' | 'DISBURSEMENT' | 'CONFIGURATION' | 'MONITORING';
 
@@ -49,7 +50,7 @@ export interface Rule {
   tenant_id: string;
   product_id: string;
   rule_type: RuleType;
-  condition: string;        // JavaScript expression or DSL
+  condition: string;        // Safe expression DSL, e.g. customer_credit_score >= 300
   action: Record<string, any>;  // Parameters for action
   priority: number;          // Higher = more important (evaluated first)
   enabled: boolean;
@@ -350,15 +351,9 @@ export class RulesEngineService {
     return results;
   }
 
-  /**
-   * Simple condition evaluator (in production, use safer sandboxed evaluation)
-   */
   private evaluateCondition(condition: string, context: EvaluationContext): boolean {
-    // Safe evaluation using template literals
-    const contextStr = JSON.stringify(context);
-    const func = new Function(...Object.keys(context), `return ${condition}`);
     try {
-      return func(...Object.values(context));
+      return evaluateBooleanExpression(condition, context);
     } catch {
       return false;
     }
