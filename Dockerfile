@@ -2,20 +2,20 @@
 # Copyright (c) 2026 getfluxo.io
 # License: PROPRIETARY
 
-FROM node:24-alpine AS builder
+FROM node:22.22.3-alpine AS builder
 WORKDIR /usr/src/app
-COPY package.json pnpm-lock.yaml* ./
-RUN npm i -g pnpm@10 && pnpm install --frozen-lockfile --prod=false
-COPY . .
-RUN pnpm run build
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY packages/fengine/package.json packages/fengine/package.json
+RUN npm i -g pnpm@10.33.0 && pnpm install --filter @getfluxo/fengine... --frozen-lockfile --prod=false
+COPY packages/fengine packages/fengine
+RUN pnpm --filter @getfluxo/fengine build
 
-FROM node:24-alpine AS runtime
+FROM node:22.22.3-alpine AS runtime
 WORKDIR /usr/src/app
-COPY --from=builder /usr/src/app/dist ./dist
-COPY package.json pnpm-lock.yaml* ./
-RUN npm i -g pnpm@10 && pnpm install --prod --frozen-lockfile
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY packages/fengine/package.json packages/fengine/package.json
+RUN npm i -g pnpm@10.33.0 && pnpm install --filter @getfluxo/fengine --prod --frozen-lockfile
+COPY --from=builder /usr/src/app/packages/fengine/dist ./dist
 ENV NODE_ENV=production
 EXPOSE 3000
-# Expose prometheus metrics port too (same process)
-EXPOSE 9100
 CMD ["node","dist/main.js"]
