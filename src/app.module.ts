@@ -9,6 +9,10 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { AccountsController } from './controllers/accounts.controller';
+import { ProductsController } from './controllers/products.controller';
+import { RulesController } from './controllers/rules.controller';
+import { SchemasController } from './controllers/schemas.controller';
+import { WorkflowsController } from './controllers/workflows.controller';
 import { AccountsService } from './services/accounts.service';
 import { PrismaService } from './services/prisma.service';
 import { MetricsService } from './metrics/metrics.service';
@@ -24,7 +28,15 @@ import { TransactionService } from './transactions/transaction.service';
 
 @Module({
   imports: [AuthModule],
-  controllers: [AppController, AccountsController, MetricsController],
+  controllers: [
+    AppController,
+    AccountsController,
+    ProductsController,
+    RulesController,
+    SchemasController,
+    WorkflowsController,
+    MetricsController,
+  ],
   providers: [
     AppService,
     AccountsService,

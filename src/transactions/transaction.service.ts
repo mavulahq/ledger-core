@@ -40,6 +40,7 @@ export interface Transaction {
   tenant_id: string;
   transaction_type: TransactionType;
   status: TransactionStatus;
+  idempotency_key?: string;
   
   // Source and destination
   from_account_id: string;
@@ -73,6 +74,13 @@ export interface SettlementResult {
   posting_status: 'SUCCESS' | 'FAILED';
   gl_entry_id?: string;
   error?: string;
+  idempotent?: boolean;
+  allocation?: {
+    principal_payment: number;
+    interest_payment: number;
+    fee_payment: number;
+    balance_after: number;
+  };
   timestamp: Date;
 }
 
@@ -102,10 +110,16 @@ export class TransactionService {
     interestDue: number;
     feesDue: number;
     currentBalance: number;
+    idempotencyKey?: string;
   }): Promise<SettlementResult> {
     const txnId = `txn_${params.loanId}_${Date.now()}`;
 
     try {
+      const replay = await this.getIdempotentResult(params.tenantId, params.idempotencyKey);
+      if (replay) {
+        return replay;
+      }
+
       // Step 1: Validate payment amount
       if (params.paymentAmount <= 0) {
         return this.failedResult(txnId, 'Invalid payment amount');
@@ -151,11 +165,21 @@ export class TransactionService {
       // In production: UPDATE accounts SET balance = balance - principal WHERE id = account_id
       console.log(`✓ Payment processed: ${txnId} (Principal: ${allocation.principal_payment}, Interest: ${allocation.interest_payment})`);
 
+      const result: SettlementResult = {
+        transaction_id: txnId,
+        status: TransactionStatus.POSTED,
+        posting_status: 'SUCCESS',
+        gl_entry_id: `je_${txnId}`,
+        allocation,
+        timestamp: new Date(),
+      };
+
       await this.store.saveTransaction(params.tenantId, {
         id: txnId,
         tenant_id: params.tenantId,
         transaction_type: TransactionType.LOAN_PAYMENT,
         status: TransactionStatus.POSTED,
+        idempotency_key: params.idempotencyKey,
         from_account_id: params.accountId,
         amount: params.paymentAmount,
         currency: params.currency,
@@ -167,7 +191,11 @@ export class TransactionService {
         created_at: new Date(),
         posted_at: new Date(),
         created_by: 'SYSTEM',
-        metadata: { customer_id: params.customerId },
+        metadata: {
+          customer_id: params.customerId,
+          idempotency_key: params.idempotencyKey,
+          settlement_result: result,
+        },
       });
       this.auditTrail.record({
         tenant_id: params.tenantId,
@@ -182,13 +210,7 @@ export class TransactionService {
         },
       });
 
-      return {
-        transaction_id: txnId,
-        status: TransactionStatus.POSTED,
-        posting_status: 'SUCCESS',
-        gl_entry_id: `je_${txnId}`,
-        timestamp: new Date(),
-      };
+      return result;
     } catch (error) {
       console.error(`Payment processing failed for ${txnId}:`, error);
       return this.failedResult(txnId, (error as Error).message);
@@ -206,16 +228,23 @@ export class TransactionService {
     principal: number;
     originationFee: number;
     currency: string;
+    idempotencyKey?: string;
   }): Promise<SettlementResult> {
     const txnId = `disburse_${params.loanId}_${Date.now()}`;
 
     try {
+      const replay = await this.getIdempotentResult(params.tenantId, params.idempotencyKey);
+      if (replay) {
+        return replay;
+      }
+
       // Create transaction record
       const txn: Transaction = {
         id: txnId,
         tenant_id: params.tenantId,
         transaction_type: TransactionType.LOAN_DISBURSEMENT,
         status: TransactionStatus.PROCESSING,
+        idempotency_key: params.idempotencyKey,
         from_account_id: 'BANK_VAULT',
         to_account_id: `CUST_${params.customerId}`,
         amount: params.principal,
@@ -224,7 +253,7 @@ export class TransactionService {
         loan_id: params.loanId,
         created_at: new Date(),
         created_by: 'SYSTEM',
-        metadata: { customer_id: params.customerId },
+        metadata: { customer_id: params.customerId, idempotency_key: params.idempotencyKey },
       };
       await this.store.saveTransaction(params.tenantId, txn);
 
@@ -246,6 +275,22 @@ export class TransactionService {
         metadata: { customer_id: params.customerId },
       });
 
+      const result: SettlementResult = {
+        transaction_id: txnId,
+        status: TransactionStatus.POSTED,
+        posting_status: 'SUCCESS',
+        gl_entry_id: `je_${txnId}`,
+        timestamp: new Date(),
+      };
+
+      txn.status = TransactionStatus.POSTED;
+      txn.posted_at = result.timestamp;
+      txn.metadata = {
+        ...txn.metadata,
+        settlement_result: result,
+      };
+      await this.store.saveTransaction(params.tenantId, txn);
+
       console.log(`✓ Disbursement processed: ${txnId} (Principal: ${params.principal})`);
       this.auditTrail.record({
         tenant_id: params.tenantId,
@@ -260,13 +305,7 @@ export class TransactionService {
         },
       });
 
-      return {
-        transaction_id: txnId,
-        status: TransactionStatus.POSTED,
-        posting_status: 'SUCCESS',
-        gl_entry_id: `je_${txnId}`,
-        timestamp: new Date(),
-      };
+      return result;
     } catch (error) {
       console.error(`Disbursement processing failed for ${txnId}:`, error);
       return this.failedResult(txnId, (error as Error).message);
@@ -347,6 +386,24 @@ export class TransactionService {
       posting_status: 'FAILED',
       error,
       timestamp: new Date(),
+    };
+  }
+
+  private async getIdempotentResult(tenantId: string, key?: string): Promise<SettlementResult | undefined> {
+    if (!key) {
+      return undefined;
+    }
+
+    const transaction = await this.store.getTransactionByIdempotencyKey(tenantId, key);
+    const stored = transaction?.metadata?.settlement_result as SettlementResult | undefined;
+    if (!transaction || !stored) {
+      return undefined;
+    }
+
+    return {
+      ...stored,
+      idempotent: true,
+      timestamp: new Date(stored.timestamp),
     };
   }
 

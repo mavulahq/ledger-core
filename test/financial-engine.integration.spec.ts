@@ -301,6 +301,41 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     console.log(`  Progress: ${status.progress_percent.toFixed(1)}% paid`);
   });
 
+  it('replays disbursement and payment idempotently', async () => {
+    const loan = await loanService.applyForLoan(tenantId, {
+      customer_id: customerId,
+      product_id: productId,
+      loan_type: LoanType.PERSONAL,
+      requested_amount: 25000,
+      requested_term_months: 12,
+      purpose: 'Idempotency test',
+      metadata: {},
+    });
+
+    await loanService.approveLoan(tenantId, loan, {
+      credit_score: 650,
+      income: 120000,
+      employment_years: 5,
+    });
+    await ledgerService.initializeChartOfAccounts(tenantId);
+
+    const disbursementKey = `idem_disburse_${loan.id}`;
+    const firstDisbursement = await loanService.disburseLoan(tenantId, loan, { idempotencyKey: disbursementKey });
+    const secondDisbursement = await loanService.disburseLoan(tenantId, loan, { idempotencyKey: disbursementKey });
+
+    expect(firstDisbursement.disbursement_id).toBe(secondDisbursement.disbursement_id);
+    expect(secondDisbursement.idempotent).toBe(true);
+
+    const paymentKey = `idem_payment_${loan.id}`;
+    const firstPayment = await loanService.processLoanPayment(tenantId, loan, 2500, { idempotencyKey: paymentKey });
+    const principalAfterFirstPayment = loan.total_paid_principal;
+    const secondPayment = await loanService.processLoanPayment(tenantId, loan, 2500, { idempotencyKey: paymentKey });
+
+    expect(secondPayment.idempotent).toBe(true);
+    expect(secondPayment.principal_paid).toBe(firstPayment.principal_paid);
+    expect(loan.total_paid_principal).toBe(principalAfterFirstPayment);
+  });
+
   it('Complete OODA cycle summary', async () => {
     console.log('\n=== COMPLETE OODA CYCLE SUMMARY ===\n');
 

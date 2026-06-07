@@ -48,7 +48,7 @@ model Product {
   enabled   Boolean  @default(true)
   config    Json
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
@@ -75,7 +75,7 @@ model Loan {
   status    String
   data      Json
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
@@ -92,6 +92,7 @@ model FinancialTransaction {
   amount    Decimal
   currency  String
   loanId    String?
+  idempotencyKey String?
   data      Json
   createdAt DateTime @default(now())
   postedAt  DateTime?
@@ -100,6 +101,7 @@ model FinancialTransaction {
   @@index([tenantId])
   @@index([tenantId, loanId])
   @@unique([tenantId, id])
+  @@unique([tenantId, idempotencyKey])
   @@map("financial_transactions")
 }
 
@@ -149,7 +151,7 @@ model CustomEntitySchema {
   displayName String
   fields      Json
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @default(now()) @updatedAt
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
@@ -165,7 +167,7 @@ model WorkflowDefinition {
   steps     Json
   enabled   Boolean  @default(true)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
@@ -185,7 +187,7 @@ model Rule {
   enabled   Boolean  @default(true)
   appliesTo Json?
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])

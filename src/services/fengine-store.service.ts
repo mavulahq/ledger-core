@@ -60,8 +60,8 @@ export class FengineStoreService {
 
     await this.enterTenant(tenantId);
     await this.prisma.db.$executeRaw`
-      INSERT INTO "products" ("id", "tenantId", "type", "name", "enabled", "config")
-      VALUES (${product.product_id}, ${tenantId}, ${product.type}, ${product.name}, ${product.enabled}, CAST(${this.json(product)} AS jsonb))
+      INSERT INTO "products" ("id", "tenantId", "type", "name", "enabled", "config", "updatedAt")
+      VALUES (${product.product_id}, ${tenantId}, ${product.type}, ${product.name}, ${product.enabled}, CAST(${this.json(product)} AS jsonb), now())
       ON CONFLICT ("tenantId", "id") DO UPDATE SET
         "type" = EXCLUDED."type",
         "name" = EXCLUDED."name",
@@ -106,8 +106,8 @@ export class FengineStoreService {
 
     await this.enterTenant(tenantId);
     await this.prisma.db.$executeRaw`
-      INSERT INTO "loans" ("id", "tenantId", "customerId", "productId", "status", "data")
-      VALUES (${loan.id}, ${tenantId}, ${loan.customer_id}, ${loan.product_id}, ${loan.status}, CAST(${this.json(loan)} AS jsonb))
+      INSERT INTO "loans" ("id", "tenantId", "customerId", "productId", "status", "data", "updatedAt")
+      VALUES (${loan.id}, ${tenantId}, ${loan.customer_id}, ${loan.product_id}, ${loan.status}, CAST(${this.json(loan)} AS jsonb), now())
       ON CONFLICT ("tenantId", "id") DO UPDATE SET
         "customerId" = EXCLUDED."customerId",
         "productId" = EXCLUDED."productId",
@@ -152,17 +152,34 @@ export class FengineStoreService {
 
     await this.enterTenant(tenantId);
     await this.prisma.db.$executeRaw`
-      INSERT INTO "financial_transactions" ("id", "tenantId", "type", "status", "amount", "currency", "loanId", "data", "postedAt")
-      VALUES (${transaction.id}, ${tenantId}, ${transaction.transaction_type}, ${transaction.status}, ${transaction.amount}, ${transaction.currency}, ${transaction.loan_id || null}, CAST(${this.json(transaction)} AS jsonb), ${transaction.posted_at || null})
+      INSERT INTO "financial_transactions" ("id", "tenantId", "type", "status", "amount", "currency", "loanId", "idempotencyKey", "data", "postedAt")
+      VALUES (${transaction.id}, ${tenantId}, ${transaction.transaction_type}, ${transaction.status}, ${transaction.amount}, ${transaction.currency}, ${transaction.loan_id || null}, ${transaction.idempotency_key || null}, CAST(${this.json(transaction)} AS jsonb), ${transaction.posted_at || null})
       ON CONFLICT ("tenantId", "id") DO UPDATE SET
         "status" = EXCLUDED."status",
         "amount" = EXCLUDED."amount",
         "currency" = EXCLUDED."currency",
         "loanId" = EXCLUDED."loanId",
+        "idempotencyKey" = EXCLUDED."idempotencyKey",
         "data" = EXCLUDED."data",
         "postedAt" = EXCLUDED."postedAt"
     `;
     return transaction;
+  }
+
+  async getTransactionByIdempotencyKey(tenantId: string, key: string): Promise<Transaction | undefined> {
+    if (!this.prisma.isConfigured) {
+      return [...(this.transactions.get(tenantId)?.values() || [])].find(
+        (transaction) => transaction.idempotency_key === key,
+      );
+    }
+
+    await this.enterTenant(tenantId);
+    const [row] = await this.prisma.db.$queryRaw<any[]>`
+      SELECT "data" FROM "financial_transactions"
+      WHERE "tenantId" = ${tenantId} AND "idempotencyKey" = ${key}
+      LIMIT 1
+    `;
+    return row ? this.fromJson<Transaction>(row.data) : undefined;
   }
 
   async listTransactions(tenantId: string): Promise<Transaction[]> {
@@ -320,8 +337,8 @@ export class FengineStoreService {
 
     await this.enterTenant(tenantId);
     await this.prisma.db.$executeRaw`
-      INSERT INTO "custom_entity_schemas" ("id", "tenantId", "entityName", "displayName", "fields", "createdAt")
-      VALUES (${schema.entity_id}, ${tenantId}, ${schema.entity_name}, ${schema.display_name}, CAST(${this.json(schema.fields)} AS jsonb), ${schema.created_at})
+      INSERT INTO "custom_entity_schemas" ("id", "tenantId", "entityName", "displayName", "fields", "createdAt", "updatedAt")
+      VALUES (${schema.entity_id}, ${tenantId}, ${schema.entity_name}, ${schema.display_name}, CAST(${this.json(schema.fields)} AS jsonb), ${schema.created_at}, now())
       ON CONFLICT ("tenantId", "id") DO UPDATE SET
         "entityName" = EXCLUDED."entityName",
         "displayName" = EXCLUDED."displayName",
@@ -351,6 +368,30 @@ export class FengineStoreService {
     }));
   }
 
+  async getSchema(tenantId: string, schemaId: string): Promise<CustomEntitySchema | undefined> {
+    if (!this.prisma.isConfigured) {
+      return this.schemas.get(tenantId)?.get(schemaId);
+    }
+
+    await this.enterTenant(tenantId);
+    const [row] = await this.prisma.db.$queryRaw<any[]>`
+      SELECT * FROM "custom_entity_schemas"
+      WHERE "tenantId" = ${tenantId} AND "id" = ${schemaId}
+      LIMIT 1
+    `;
+    return row
+      ? {
+          entity_id: row.id,
+          tenant_id: row.tenantId,
+          entity_name: row.entityName,
+          display_name: row.displayName,
+          fields: this.fromJson(row.fields),
+          created_at: row.createdAt,
+          updated_at: row.updatedAt,
+        }
+      : undefined;
+  }
+
   async saveWorkflow(tenantId: string, workflow: WorkflowDefinition): Promise<WorkflowDefinition> {
     if (!this.prisma.isConfigured) {
       const tenantWorkflows = this.workflows.get(tenantId) || new Map<string, WorkflowDefinition>();
@@ -361,8 +402,8 @@ export class FengineStoreService {
 
     await this.enterTenant(tenantId);
     await this.prisma.db.$executeRaw`
-      INSERT INTO "workflow_definitions" ("id", "tenantId", "name", "trigger", "steps", "enabled")
-      VALUES (${workflow.workflow_id}, ${tenantId}, ${workflow.name}, ${workflow.trigger}, CAST(${this.json(workflow.steps)} AS jsonb), ${workflow.enabled})
+      INSERT INTO "workflow_definitions" ("id", "tenantId", "name", "trigger", "steps", "enabled", "updatedAt")
+      VALUES (${workflow.workflow_id}, ${tenantId}, ${workflow.name}, ${workflow.trigger}, CAST(${this.json(workflow.steps)} AS jsonb), ${workflow.enabled}, now())
       ON CONFLICT ("tenantId", "id") DO UPDATE SET
         "name" = EXCLUDED."name",
         "trigger" = EXCLUDED."trigger",
@@ -413,6 +454,28 @@ export class FengineStoreService {
     }));
   }
 
+  async getWorkflow(tenantId: string, workflowId: string): Promise<WorkflowDefinition | undefined> {
+    if (!this.prisma.isConfigured) {
+      return this.workflows.get(tenantId)?.get(workflowId);
+    }
+
+    await this.enterTenant(tenantId);
+    const [row] = await this.prisma.db.$queryRaw<any[]>`
+      SELECT * FROM "workflow_definitions"
+      WHERE "tenantId" = ${tenantId} AND "id" = ${workflowId}
+      LIMIT 1
+    `;
+    return row
+      ? {
+          workflow_id: row.id,
+          name: row.name,
+          trigger: row.trigger,
+          steps: this.fromJson(row.steps),
+          enabled: row.enabled,
+        }
+      : undefined;
+  }
+
   async saveRules(tenantId: string, productId: string, rules: Rule[]): Promise<Rule[]> {
     for (const rule of rules) {
       await this.saveRule(tenantId, rule);
@@ -433,8 +496,8 @@ export class FengineStoreService {
 
     await this.enterTenant(tenantId);
     await this.prisma.db.$executeRaw`
-      INSERT INTO "rules" ("id", "tenantId", "productId", "ruleType", "condition", "action", "priority", "enabled", "appliesTo", "createdAt")
-      VALUES (${rule.id}, ${tenantId}, ${rule.product_id}, ${rule.rule_type}, ${rule.condition}, CAST(${this.json(rule.action)} AS jsonb), ${rule.priority}, ${rule.enabled}, CAST(${this.json(rule.applies_to || [])} AS jsonb), ${rule.created_at})
+      INSERT INTO "rules" ("id", "tenantId", "productId", "ruleType", "condition", "action", "priority", "enabled", "appliesTo", "createdAt", "updatedAt")
+      VALUES (${rule.id}, ${tenantId}, ${rule.product_id}, ${rule.rule_type}, ${rule.condition}, CAST(${this.json(rule.action)} AS jsonb), ${rule.priority}, ${rule.enabled}, CAST(${this.json(rule.applies_to || [])} AS jsonb), ${rule.created_at}, now())
       ON CONFLICT ("tenantId", "id") DO UPDATE SET
         "productId" = EXCLUDED."productId",
         "ruleType" = EXCLUDED."ruleType",

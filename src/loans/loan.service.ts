@@ -300,8 +300,23 @@ export class LoanService {
   /**
    * Disburse loan (transfer principal to customer account)
    */
-  async disburseLoan(tenantId: string, loan: Loan): Promise<{ success: boolean; disbursement_id: string }> {
+  async disburseLoan(
+    tenantId: string,
+    loan: Loan,
+    options: { idempotencyKey?: string } = {},
+  ): Promise<{ success: boolean; disbursement_id: string; idempotent?: boolean }> {
     if (loan.status !== LoanStatus.APPROVED) {
+      const replay = options.idempotencyKey
+        ? await this.store.getTransactionByIdempotencyKey(tenantId, options.idempotencyKey)
+        : undefined;
+      if (replay?.metadata?.settlement_result?.posting_status === 'SUCCESS') {
+        return {
+          success: true,
+          disbursement_id: replay.id,
+          idempotent: true,
+        };
+      }
+
       throw new Error(`Loan must be APPROVED status to disburse (current: ${loan.status})`);
     }
 
@@ -313,9 +328,18 @@ export class LoanService {
       principal: loan.principal_amount,
       originationFee: loan.origination_fee_amount,
       currency: 'MZN',
+      idempotencyKey: options.idempotencyKey,
     });
 
     if (result.posting_status === 'SUCCESS') {
+      if (result.idempotent) {
+        return {
+          success: true,
+          disbursement_id: result.transaction_id,
+          idempotent: true,
+        };
+      }
+
       loan.status = LoanStatus.ACTIVE;
       loan.disbursement_date = new Date();
       loan.disbursed_amount = loan.principal_amount;
@@ -371,8 +395,9 @@ export class LoanService {
   async processLoanPayment(
     tenantId: string,
     loan: Loan,
-    paymentAmount: number
-  ): Promise<{ success: boolean; principal_paid: number; interest_paid: number; balance_remaining: number }> {
+    paymentAmount: number,
+    options: { idempotencyKey?: string } = {},
+  ): Promise<{ success: boolean; principal_paid: number; interest_paid: number; balance_remaining: number; idempotent?: boolean }> {
     if (loan.status !== LoanStatus.ACTIVE && loan.status !== LoanStatus.DEFAULTED) {
       throw new Error(`Cannot process payment for loan in ${loan.status} status`);
     }
@@ -397,9 +422,20 @@ export class LoanService {
       interestDue,
       feesDue: feeDue,
       currentBalance: loan.remaining_balance,
+      idempotencyKey: options.idempotencyKey,
     });
 
     if (result.posting_status === 'SUCCESS') {
+      if (result.idempotent && result.allocation) {
+        return {
+          success: true,
+          principal_paid: result.allocation.principal_payment,
+          interest_paid: result.allocation.interest_payment,
+          balance_remaining: Math.max(result.allocation.balance_after, 0),
+          idempotent: true,
+        };
+      }
+
       const allocation = allocatePayment({
         payment_amount: paymentAmount,
         interest_due: interestDue,

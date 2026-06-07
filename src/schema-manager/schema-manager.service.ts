@@ -237,8 +237,16 @@ export class SchemaManagerService {
     return this.store.listSchemas(tenantId);
   }
 
+  getEntitySchema(tenantId: string, entityId: string): Promise<CustomEntitySchema | undefined> {
+    return this.store.getSchema(tenantId, entityId);
+  }
+
   listWorkflows(tenantId: string): Promise<WorkflowDefinition[]> {
     return this.store.listWorkflows(tenantId);
+  }
+
+  getWorkflow(tenantId: string, workflowId: string): Promise<WorkflowDefinition | undefined> {
+    return this.store.getWorkflow(tenantId, workflowId);
   }
 
   /**
@@ -486,8 +494,8 @@ export class SchemaManagerService {
   /**
    * Export schema as JSON (for version control, sharing)
    */
-  exportSchema(entityId: string): any {
-    const schema = this.schemas.get(entityId);
+  async exportSchema(tenantId: string, entityId: string): Promise<any> {
+    const schema = this.schemas.get(entityId) || await this.store.getSchema(tenantId, entityId);
     if (!schema) throw new Error(`Schema not found: ${entityId}`);
 
     return {

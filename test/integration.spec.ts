@@ -5,6 +5,12 @@ import { AppController } from '../src/app.controller';
 import { AuthController } from '../src/auth/auth.controller';
 import { MetricsService } from '../src/metrics/metrics.service';
 import { AccountsController } from '../src/controllers/accounts.controller';
+import { ProductsController } from '../src/controllers/products.controller';
+import { RulesController } from '../src/controllers/rules.controller';
+import { SchemasController } from '../src/controllers/schemas.controller';
+import { WorkflowsController } from '../src/controllers/workflows.controller';
+import { ProductType } from '../src/products/product-config.service';
+import { RuleType } from '../src/rules-engine/rules-engine.service';
 import { TenantMiddleware } from '../src/middleware/tenant.middleware';
 import { exposeCsrfToken } from '../src/middleware/csrf.middleware';
 
@@ -14,6 +20,10 @@ describe('fengine - Integration Tests (app composition)', () => {
   let authController: AuthController;
   let metricsService: MetricsService;
   let accountsController: AccountsController;
+  let productsController: ProductsController;
+  let rulesController: RulesController;
+  let schemasController: SchemasController;
+  let workflowsController: WorkflowsController;
   const tenantId = 'test_inst_001';
 
   beforeAll(async () => {
@@ -29,6 +39,10 @@ describe('fengine - Integration Tests (app composition)', () => {
     authController = app.get(AuthController);
     metricsService = app.get(MetricsService);
     accountsController = app.get(AccountsController);
+    productsController = app.get(ProductsController);
+    rulesController = app.get(RulesController);
+    schemasController = app.get(SchemasController);
+    workflowsController = app.get(WorkflowsController);
   });
 
   afterAll(async () => {
@@ -106,6 +120,71 @@ describe('fengine - Integration Tests (app composition)', () => {
       );
       expect(res).toHaveProperty('id');
       expect(res.name).toBe('Test Account');
+    });
+  });
+
+  describe('Configurable Products API', () => {
+    it('creates and lists products for tenant', async () => {
+      const product = await productsController.upsert(
+        { tenantId },
+        {
+          type: ProductType.LOAN,
+          config: {
+            product_id: 'prod_api_loan',
+            name: 'API Loan',
+            enabled: true,
+          },
+        },
+      );
+      const list = await productsController.list({ tenantId });
+      expect(product.product_id).toBe('prod_api_loan');
+      expect(list.some((item) => item.product_id === 'prod_api_loan')).toBe(true);
+    });
+
+    it('creates and lists rules for product', async () => {
+      const rule = await rulesController.create(
+        { tenantId },
+        'prod_api_loan',
+        {
+          id: 'rule_api_min_score',
+          rule_type: RuleType.CREDIT_SCORE_MIN,
+          condition: 'customer_credit_score >= 500',
+          action: { min_score: 500 },
+          priority: 10,
+          applies_to: ['ORIGINATION'],
+        },
+      );
+      const rules = await rulesController.list({ tenantId }, 'prod_api_loan');
+      expect(rule.id).toBe('rule_api_min_score');
+      expect(rules.some((item) => item.id === 'rule_api_min_score')).toBe(true);
+    });
+  });
+
+  describe('No-code Schemas and Workflows API', () => {
+    it('creates and exports entity schemas', async () => {
+      const schema = await schemasController.create(
+        { tenantId },
+        {
+          entity_name: 'api_customer_profile',
+          display_name: 'API Customer Profile',
+          fields: [{ name: 'full_name', type: 'STRING', required: true }],
+        },
+      );
+      const exported = await schemasController.export({ tenantId }, schema.entity_id);
+      expect(exported.entity_name).toBe('api_customer_profile');
+    });
+
+    it('creates and executes workflows', async () => {
+      const workflow = await workflowsController.create(
+        { tenantId },
+        {
+          name: 'API Audit Workflow',
+          trigger: 'API_TEST',
+          steps: [{ order: 1, name: 'Log', action: 'LOG_EVENT', parameters: { event_type: 'API_TEST', severity: 'INFO' } }],
+        },
+      );
+      const result = await workflowsController.execute({ tenantId }, workflow.workflow_id, { context: {} });
+      expect(result.success).toBe(true);
     });
   });
 
