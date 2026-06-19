@@ -13,6 +13,7 @@ import { ProductsController } from './controllers/products.controller';
 import { RulesController } from './controllers/rules.controller';
 import { SchemasController } from './controllers/schemas.controller';
 import { WorkflowsController } from './controllers/workflows.controller';
+import { InternalWorkerController } from './controllers/internal-worker.controller';
 import { AccountsService } from './services/accounts.service';
 import { PrismaService } from './services/prisma.service';
 import { MetricsService } from './metrics/metrics.service';
@@ -25,6 +26,9 @@ import { ProductConfigService } from './products/product-config.service';
 import { RulesEngineService } from './rules-engine/rules-engine.service';
 import { SchemaManagerService } from './schema-manager/schema-manager.service';
 import { TransactionService } from './transactions/transaction.service';
+import { EngineEventService } from './worker/engine-event.service';
+import { InternalApiKeyGuard } from './worker/internal-api-key.guard';
+import { WorkerQueueService } from './worker/worker-queue.service';
 
 @Module({
   imports: [AuthModule],
@@ -36,6 +40,7 @@ import { TransactionService } from './transactions/transaction.service';
     SchemasController,
     WorkflowsController,
     MetricsController,
+    InternalWorkerController,
   ],
   providers: [
     AppService,
@@ -50,6 +55,9 @@ import { TransactionService } from './transactions/transaction.service';
     TransactionService,
     LoanService,
     SchemaManagerService,
+    WorkerQueueService,
+    EngineEventService,
+    InternalApiKeyGuard,
   ],
 })
 export class AppModule {}
