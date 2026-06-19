@@ -2,7 +2,7 @@
  * getfluxo.io - Financial Rules Engine & Business Logic
  * Copyright (c) 2025 getfluxo.io
  * 
- * Author: Estandar Mustaq <estandarmustaq@getfluxo.io>
+ * Author: EstandarMustaq <estandarmustaq@getfluxo.io>
  * License: Proprietary - See LICENSE file
  * 
  * Business rules evaluation: eligibility, limits, fees, workflows

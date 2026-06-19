@@ -2,7 +2,7 @@
  * getfluxo.io - Loan Management & Origination Engine
  * Copyright (c) 2025 getfluxo.io
  * 
- * Author: Estandar Mustaq <estandarmustaq@getfluxo.io>
+ * Author: EstandarMustaq <estandarmustaq@getfluxo.io>
  * License: Proprietary - See LICENSE file
  * 
  * Complete loan lifecycle: origination, validation, disbursement, payments, closures

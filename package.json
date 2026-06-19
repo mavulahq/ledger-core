@@ -2,6 +2,8 @@
   "name": "@getfluxo/fengine",
   "version": "0.1.0",
   "private": true,
+  "author": "EstandarMustaq <estandarmustaq@getfluxo.io>",
+  "license": "SEE LICENSE IN LICENSE",
   "main": "dist/main.js",
   "scripts": {
     "prebuild": "prisma generate",

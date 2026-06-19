@@ -2,7 +2,7 @@
  * getfluxo.io - Product Configuration & Auto-Creation Engine
  * Copyright (c) 2025 getfluxo.io
  * 
- * Author: Estandar Mustaq <estandarmustaq@getfluxo.io>
+ * Author: EstandarMustaq <estandarmustaq@getfluxo.io>
  * License: Proprietary - See LICENSE file
  * 
  * Auto-configurable financial products (CHECKING, SAVINGS, LOAN, CREDIT_LINE)
