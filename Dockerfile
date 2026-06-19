@@ -12,7 +12,7 @@ RUN --mount=type=cache,id=getfluxo-pnpm-store,target=/pnpm/store,sharing=locked 
     pnpm config set store-dir /pnpm/store && \
     pnpm install --filter @getfluxo/fengine... --frozen-lockfile --prod=false --ignore-scripts
 COPY packages/fengine packages/fengine
-RUN pnpm --filter @getfluxo/fengine prisma:generate && pnpm --filter @getfluxo/fengine build
+RUN pnpm --filter @getfluxo/fengine build
 
 FROM node:22.22.3-alpine AS runtime
 WORKDIR /usr/src/app
