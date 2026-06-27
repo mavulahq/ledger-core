@@ -41,22 +41,39 @@ describe('fengine worker communication', () => {
     const queue = new WorkerQueueService();
     const outbox = new DomainOutboxService({ isConfigured: false } as any);
     const publisher = new DomainOutboxPublisherService(outbox, queue);
-    const event = new DomainEventFactory().loanDisbursed({
+    const factory = new DomainEventFactory();
+    const disbursementEvent = factory.loanDisbursed({
       tenantId: 'tenant_001',
       loan: approvedLoan(),
       transactionId: 'disburse_loan_001',
       currency: 'MZN',
       idempotencyKey: 'idem_disburse_loan_001',
     });
+    const paymentEvent = factory.lendingPaymentPosted({
+      tenantId: 'tenant_001',
+      loan: approvedLoan(),
+      transactionId: 'txn_loan_001',
+      sourceAccountId: 'CUST_cust_001',
+      paymentAmount: 2500,
+      currency: 'MZN',
+      allocation: {
+        principal_payment: 1375,
+        interest_payment: 625,
+        fee_payment: 500,
+        balance_after: 23625,
+      },
+      idempotencyKey: 'idem_payment_loan_001',
+    });
 
-    await outbox.append(event);
+    await outbox.append(disbursementEvent);
+    await outbox.append(paymentEvent);
     await expect(publisher.publishPending(1)).resolves.toMatchObject({
       claimed: 1,
       published: 1,
       failed: 0,
     });
 
-    const queued = await queue.get(`fengine-${event.event_id}`);
+    const queued = await queue.get(`fengine-${disbursementEvent.event_id}`);
     expect(queued).toMatchObject({
       type: 'FENGINE_EVENT',
       tenant_id: 'tenant_001',
@@ -66,10 +83,30 @@ describe('fengine worker communication', () => {
       },
     });
     expect(queued?.payload.event).toMatchObject({
-      event_id: event.event_id,
+      event_id: disbursementEvent.event_id,
       event_type: 'lending.loan_disbursed',
     });
-    await expect(outbox.list('tenant_001')).resolves.toEqual([expect.objectContaining({ status: 'PUBLISHED' })]);
+    await expect(publisher.publishPending(10)).resolves.toMatchObject({
+      claimed: 1,
+      published: 1,
+      failed: 0,
+    });
+    const paymentQueued = await queue.get(`fengine-${paymentEvent.event_id}`);
+    expect(paymentQueued).toMatchObject({
+      payload: {
+        domain_event: true,
+        event_type: 'lending.payment_posted',
+      },
+    });
+    expect(paymentQueued?.payload.event.payload).toMatchObject({
+      transaction_id: 'txn_loan_001',
+      allocation: { principal: '1375.00', interest: '625.00', fees: '500.00' },
+      balance_after: '23625.00',
+    });
+    await expect(outbox.list('tenant_001')).resolves.toEqual([
+      expect.objectContaining({ status: 'PUBLISHED' }),
+      expect.objectContaining({ status: 'PUBLISHED' }),
+    ]);
   });
 
   it('executes workflows for callbacks and replays completed jobs safely', async () => {
@@ -106,11 +143,19 @@ describe('fengine worker communication', () => {
     const audit = { record: jest.fn() };
     const inbox = new DomainInboxService({ isConfigured: false } as any);
     const service = new EngineEventService(schemas as any, audit as any, inbox);
-    const event = new DomainEventFactory().loanDisbursed({
+    const event = new DomainEventFactory().lendingPaymentPosted({
       tenantId: 'tenant_001',
       loan: approvedLoan(),
-      transactionId: 'disburse_loan_002',
+      transactionId: 'txn_loan_002',
+      sourceAccountId: 'CUST_cust_001',
+      paymentAmount: 2500,
       currency: 'MZN',
+      allocation: {
+        principal_payment: 1375,
+        interest_payment: 625,
+        fee_payment: 500,
+        balance_after: 23625,
+      },
     });
 
     await expect(service.handleDomainEvent(event, 'job_001')).resolves.toMatchObject({

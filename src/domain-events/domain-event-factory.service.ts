@@ -1,7 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { Loan } from '../loans/loan.service';
-import { DomainEventEnvelope, LoanDisbursedPayload } from './domain-event.types';
+import {
+  DomainEventEnvelope,
+  LendingPaymentPostedPayload,
+  LoanDisbursedPayload,
+} from './domain-event.types';
 
 @Injectable()
 export class DomainEventFactory {
@@ -44,6 +48,63 @@ export class DomainEventFactory {
         producer: 'fengine',
         data_classification: 'restricted',
         schema_uri: 'contracts/domain-events/payloads/lending.loan_disbursed.v1.schema.json',
+      },
+    };
+  }
+
+  lendingPaymentPosted(input: {
+    tenantId: string;
+    loan: Loan;
+    transactionId: string;
+    sourceAccountId: string;
+    paymentAmount: number;
+    currency: string;
+    allocation: {
+      principal_payment: number;
+      interest_payment: number;
+      fee_payment: number;
+      balance_after: number;
+    };
+    idempotencyKey?: string;
+    occurredAt?: Date;
+  }): DomainEventEnvelope<LendingPaymentPostedPayload> {
+    const occurredAt = input.occurredAt || new Date();
+    const eventId = `evt_${randomUUID()}`;
+    const idempotencyKey =
+      input.idempotencyKey || `${input.tenantId}:${input.loan.id}:payment:${input.transactionId}`;
+
+    return {
+      event_id: eventId,
+      event_type: 'lending.payment_posted',
+      event_version: 1,
+      occurred_at: occurredAt.toISOString(),
+      tenant_id: input.tenantId,
+      aggregate: {
+        type: 'loan',
+        id: input.loan.id,
+        version: this.aggregateVersion(input.loan),
+      },
+      correlation_id: `corr_${input.transactionId}`,
+      causation_id: input.idempotencyKey || input.transactionId,
+      idempotency_key: idempotencyKey,
+      payload: {
+        transaction_id: input.transactionId,
+        source_account_id: input.sourceAccountId,
+        money: {
+          amount: input.paymentAmount.toFixed(2),
+          currency: input.currency,
+        },
+        allocation: {
+          principal: input.allocation.principal_payment.toFixed(2),
+          interest: input.allocation.interest_payment.toFixed(2),
+          fees: input.allocation.fee_payment.toFixed(2),
+        },
+        balance_after: Math.max(input.allocation.balance_after, 0).toFixed(2),
+      },
+      metadata: {
+        producer: 'fengine',
+        data_classification: 'restricted',
+        schema_uri: 'contracts/domain-events/payloads/lending.payment_posted.v1.schema.json',
       },
     };
   }
