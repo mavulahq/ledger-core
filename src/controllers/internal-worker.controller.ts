@@ -1,8 +1,9 @@
 import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Post, UseGuards } from '@nestjs/common';
+import { DomainOutboxPublisherService } from '../domain-events/domain-outbox-publisher.service';
 import { EngineEventService } from '../worker/engine-event.service';
 import { InternalApiKeyGuard } from '../worker/internal-api-key.guard';
 import { WorkerQueueService } from '../worker/worker-queue.service';
-import { EngineEventCallback, EnqueueEngineEventInput } from '../worker/worker.types';
+import { DomainEventWorkerCallback, EngineEventCallback, EnqueueEngineEventInput } from '../worker/worker.types';
 
 @Controller('internal/worker')
 @UseGuards(InternalApiKeyGuard)
@@ -10,12 +11,17 @@ export class InternalWorkerController {
   constructor(
     private readonly queue: WorkerQueueService,
     private readonly events: EngineEventService,
+    private readonly outboxPublisher: DomainOutboxPublisherService,
   ) {}
 
   @Post('jobs')
   enqueue(@Body() body: EnqueueEngineEventInput) {
     this.validateEvent(body);
-    return this.queue.enqueue({ ...body, payload: body.payload || {}, max_attempts: body.max_attempts || 3 });
+    return this.queue.enqueue({
+      ...body,
+      payload: body.payload || {},
+      max_attempts: body.max_attempts || 3,
+    });
   }
 
   @Get('jobs/:jobId')
@@ -34,12 +40,30 @@ export class InternalWorkerController {
     return this.events.handle({ ...body, payload: body.payload || {} });
   }
 
+  @Post('domain-events')
+  domainCallback(@Body() body: DomainEventWorkerCallback) {
+    if (!body?.event) throw new BadRequestException('event is required');
+    return this.events.handleDomainEvent(body.event, body.job_id);
+  }
+
+  @Post('outbox/publish')
+  publishOutbox(@Body() body: { limit?: number } = {}) {
+    const limit = body.limit === undefined ? undefined : Number(body.limit);
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+      throw new BadRequestException('limit must be a positive integer');
+    }
+    return this.outboxPublisher.publishPending(limit);
+  }
+
   private validateEvent(body: { tenant_id?: string; event_type?: string; max_attempts?: number }) {
     if (!body?.tenant_id) throw new BadRequestException('tenant_id is required');
     if (!body.event_type || !/^[A-Z][A-Z0-9_]{2,100}$/.test(body.event_type)) {
       throw new BadRequestException('event_type must be an uppercase event identifier');
     }
-    if (body.max_attempts !== undefined && (!Number.isInteger(Number(body.max_attempts)) || Number(body.max_attempts) < 1)) {
+    if (
+      body.max_attempts !== undefined &&
+      (!Number.isInteger(Number(body.max_attempts)) || Number(body.max_attempts) < 1)
+    ) {
       throw new BadRequestException('max_attempts must be a positive integer');
     }
   }

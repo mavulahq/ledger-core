@@ -14,6 +14,10 @@ import { RulesController } from './controllers/rules.controller';
 import { SchemasController } from './controllers/schemas.controller';
 import { WorkflowsController } from './controllers/workflows.controller';
 import { InternalWorkerController } from './controllers/internal-worker.controller';
+import { DomainEventFactory } from './domain-events/domain-event-factory.service';
+import { DomainInboxService } from './domain-events/domain-inbox.service';
+import { DomainOutboxPublisherService } from './domain-events/domain-outbox-publisher.service';
+import { DomainOutboxService } from './domain-events/domain-outbox.service';
 import { AccountsService } from './services/accounts.service';
 import { PrismaService } from './services/prisma.service';
 import { MetricsService } from './metrics/metrics.service';
@@ -57,6 +61,10 @@ import { WorkerQueueService } from './worker/worker-queue.service';
     SchemaManagerService,
     WorkerQueueService,
     EngineEventService,
+    DomainEventFactory,
+    DomainOutboxService,
+    DomainInboxService,
+    DomainOutboxPublisherService,
     InternalApiKeyGuard,
   ],
 })

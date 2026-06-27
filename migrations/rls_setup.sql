@@ -27,6 +27,8 @@ ALTER TABLE public.custom_entity_schemas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.workflow_definitions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_trail_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.domain_outbox_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.domain_inbox_events ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.accounts FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.products FORCE ROW LEVEL SECURITY;
@@ -39,6 +41,8 @@ ALTER TABLE public.custom_entity_schemas FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.workflow_definitions FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.rules FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_trail_events FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.domain_outbox_events FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.domain_inbox_events FORCE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS tenant_isolation_accounts ON public.accounts;
 CREATE POLICY tenant_isolation_accounts ON public.accounts
@@ -94,6 +98,16 @@ DROP POLICY IF EXISTS tenant_isolation_audit_trail_events ON public.audit_trail_
 CREATE POLICY tenant_isolation_audit_trail_events ON public.audit_trail_events
   USING ("tenantId" = public.current_tenant_id())
   WITH CHECK ("tenantId" = public.current_tenant_id());
+
+DROP POLICY IF EXISTS tenant_isolation_domain_outbox_events ON public.domain_outbox_events;
+CREATE POLICY tenant_isolation_domain_outbox_events ON public.domain_outbox_events
+  USING ("tenantId" = public.current_tenant_id() OR public.current_tenant_id() = '*')
+  WITH CHECK ("tenantId" = public.current_tenant_id() OR public.current_tenant_id() = '*');
+
+DROP POLICY IF EXISTS tenant_isolation_domain_inbox_events ON public.domain_inbox_events;
+CREATE POLICY tenant_isolation_domain_inbox_events ON public.domain_inbox_events
+  USING ("tenantId" = public.current_tenant_id() OR public.current_tenant_id() = '*')
+  WITH CHECK ("tenantId" = public.current_tenant_id() OR public.current_tenant_id() = '*');
 
 DO $$
 BEGIN

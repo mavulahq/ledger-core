@@ -1,7 +1,7 @@
 /*
  * getfluxo.io - Financial Engine Integration Test
  * Copyright (c) 2025 getfluxo.io
- * 
+ *
  * Test: Complete loan lifecycle (apply → approve → disburse → payment)
  * This demonstrates all modules working together: Products, Rules, Calculations, GL, Transactions, Loans
  */
@@ -15,6 +15,8 @@ import { ProductConfigService, ProductType } from '../src/products/product-confi
 import { PrismaService } from '../src/services/prisma.service';
 import { AuditTrailService } from '../src/services/audit-trail.service';
 import { FengineStoreService } from '../src/services/fengine-store.service';
+import { DomainEventFactory } from '../src/domain-events/domain-event-factory.service';
+import { DomainOutboxService } from '../src/domain-events/domain-outbox.service';
 import {
   calculatePMT,
   getMonthlyRateFromAPR,
@@ -27,6 +29,7 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
   let rulesEngine: RulesEngineService;
   let ledgerService: LedgerService;
   let productConfigService: ProductConfigService;
+  let outboxService: DomainOutboxService;
 
   const tenantId = 'test_inst_001';
   const customerId = 'cust_001';
@@ -43,9 +46,13 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
         ProductConfigService,
         FengineStoreService,
         AuditTrailService,
+        DomainEventFactory,
+        DomainOutboxService,
         {
           provide: PrismaService,
-          useValue: { /* mock Prisma */ },
+          useValue: {
+            /* mock Prisma */
+          },
         },
       ],
     }).compile();
@@ -55,6 +62,7 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     rulesEngine = module.get<RulesEngineService>(RulesEngineService);
     ledgerService = module.get<LedgerService>(LedgerService);
     productConfigService = module.get<ProductConfigService>(ProductConfigService);
+    outboxService = module.get<DomainOutboxService>(DomainOutboxService);
   });
 
   it('[OBSERVE] Customer applies for loan', async () => {
@@ -115,14 +123,14 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
       transaction_amount: 25000,
     });
 
-    const passed = ruleResults.filter(r => r.passed).length;
-    const failed = ruleResults.filter(r => !r.passed).length;
+    const passed = ruleResults.filter((r) => r.passed).length;
+    const failed = ruleResults.filter((r) => !r.passed).length;
 
     console.log(`Rule Evaluation Results:`);
     console.log(`  Passed: ${passed}`);
     console.log(`  Failed: ${failed}\n`);
 
-    ruleResults.slice(0, 5).forEach(result => {
+    ruleResults.slice(0, 5).forEach((result) => {
       const status = result.passed ? '✓' : '✗';
       console.log(`  ${status} ${result.rule_type}: ${result.passed ? 'PASS' : 'FAIL'}`);
     });
@@ -208,6 +216,22 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     // Verify loan status
     expect(loan.status).toBe(LoanStatus.ACTIVE);
     expect(loan.disbursement_date).toBeDefined();
+    await expect(outboxService.list(tenantId)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: 'PENDING',
+          envelope: expect.objectContaining({
+            event_type: 'lending.loan_disbursed',
+            tenant_id: tenantId,
+            aggregate: expect.objectContaining({ type: 'loan', id: loan.id }),
+            payload: expect.objectContaining({
+              transaction_id: disburse.disbursement_id,
+              money: { amount: '25000.00', currency: 'MZN' },
+            }),
+          }),
+        }),
+      ]),
+    );
     console.log(`Loan Status: ${loan.status} ✓`);
   });
 
@@ -237,18 +261,17 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     console.log('Month | Payment Date | Opening | Payment | Principal | Interest | Closing');
     console.log('------|--------------|---------|---------|-----------|----------|-------');
 
-    schedule.slice(0, 6).forEach(item => {
-      const dateStr = item.payment_date instanceof Date
-        ? item.payment_date.toISOString().split('T')[0]
-        : item.payment_date;
+    schedule.slice(0, 6).forEach((item) => {
+      const dateStr =
+        item.payment_date instanceof Date ? item.payment_date.toISOString().split('T')[0] : item.payment_date;
 
       console.log(
         `${String(item.installment).padEnd(5)} | ${dateStr} | ` +
-        `${String(Math.round(item.opening_balance)).padStart(7)} | ` +
-        `${String(Math.round(item.payment)).padStart(7)} | ` +
-        `${String(Math.round(item.principal)).padStart(9)} | ` +
-        `${String(Math.round(item.interest)).padStart(8)} | ` +
-        `${String(Math.round(item.closing_balance)).padStart(7)}`
+          `${String(Math.round(item.opening_balance)).padStart(7)} | ` +
+          `${String(Math.round(item.payment)).padStart(7)} | ` +
+          `${String(Math.round(item.principal)).padStart(9)} | ` +
+          `${String(Math.round(item.interest)).padStart(8)} | ` +
+          `${String(Math.round(item.closing_balance)).padStart(7)}`,
       );
     });
 
@@ -320,8 +343,12 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     await ledgerService.initializeChartOfAccounts(tenantId);
 
     const disbursementKey = `idem_disburse_${loan.id}`;
-    const firstDisbursement = await loanService.disburseLoan(tenantId, loan, { idempotencyKey: disbursementKey });
-    const secondDisbursement = await loanService.disburseLoan(tenantId, loan, { idempotencyKey: disbursementKey });
+    const firstDisbursement = await loanService.disburseLoan(tenantId, loan, {
+      idempotencyKey: disbursementKey,
+    });
+    const secondDisbursement = await loanService.disburseLoan(tenantId, loan, {
+      idempotencyKey: disbursementKey,
+    });
 
     expect(firstDisbursement.disbursement_id).toBe(secondDisbursement.disbursement_id);
     expect(secondDisbursement.idempotent).toBe(true);

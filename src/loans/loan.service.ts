@@ -1,10 +1,10 @@
 /*
  * getfluxo.io - Loan Management & Origination Engine
  * Copyright (c) 2025 getfluxo.io
- * 
+ *
  * Author: EstandarMustaq <estandarmustaq@getfluxo.io>
  * License: Proprietary - See LICENSE file
- * 
+ *
  * Complete loan lifecycle: origination, validation, disbursement, payments, closures
  * Integrated with financial calculations, rules engine, GL, transactions
  */
@@ -16,6 +16,8 @@ import { OODAStage, RulesEngineService } from '../rules-engine/rules-engine.serv
 import { ProductConfigService } from '../products/product-config.service';
 import { AuditTrailService } from '../services/audit-trail.service';
 import { FengineStoreService } from '../services/fengine-store.service';
+import { DomainEventFactory } from '../domain-events/domain-event-factory.service';
+import { DomainOutboxService } from '../domain-events/domain-outbox.service';
 import {
   allocatePayment,
   calculatePMT,
@@ -48,46 +50,46 @@ export interface Loan {
   tenant_id: string;
   customer_id: string;
   product_id: string;
-  
+
   // Loan details
   loan_type: LoanType;
   principal_amount: number;
   approved_amount?: number;
   disbursed_amount: number;
-  
+
   // Terms
   term_months: number;
-  monthly_rate: number;  // e.g., 0.025 for 2.5%
+  monthly_rate: number; // e.g., 0.025 for 2.5%
   annual_rate: number;
   interest_method: 'SIMPLE' | 'COMPOUND' | 'DAILY_ACCRUAL';
-  
+
   // Fees
   origination_fee_percent: number;
   origination_fee_amount: number;
   late_payment_fee_percent: number;
-  
+
   // Amortization
   monthly_payment: number;
   total_interest: number;
   total_repayable: number;
-  
+
   // Grace period
   grace_months: number;
-  
+
   // Status & dates
   status: LoanStatus;
   application_date: Date;
   approval_date?: Date;
   disbursement_date?: Date;
   maturity_date?: Date;
-  
+
   // Tracking
   total_paid_principal: number;
   total_paid_interest: number;
   total_paid_fees: number;
   remaining_balance: number;
   days_overdue?: number;
-  
+
   created_at: Date;
   updated_at: Date;
 }
@@ -123,6 +125,8 @@ export class LoanService {
     private productConfigService: ProductConfigService,
     private auditTrail: AuditTrailService,
     private store: FengineStoreService,
+    private domainEvents: DomainEventFactory,
+    private outbox: DomainOutboxService,
   ) {}
 
   /**
@@ -200,7 +204,11 @@ export class LoanService {
   async approveLoan(
     tenantId: string,
     loan: Loan,
-    customerCredit: { credit_score: number; income: number; employment_years: number }
+    customerCredit: {
+      credit_score: number;
+      income: number;
+      employment_years: number;
+    },
   ): Promise<LoanApprovalResult> {
     // Evaluate rules
     const ruleResults = await this.rulesEngine.evaluateRules(loan.product_id, {
@@ -214,12 +222,12 @@ export class LoanService {
       stage: 'ORIGINATION' satisfies OODAStage,
     });
 
-    const passed = ruleResults.filter(r => r.passed).length;
-    const failed = ruleResults.filter(r => !r.passed).length;
+    const passed = ruleResults.filter((r) => r.passed).length;
+    const failed = ruleResults.filter((r) => !r.passed).length;
 
     // Auto-approve if all critical rules pass
     const criticalRulesFailed = ruleResults.filter(
-      r => !r.passed && ['CREDIT_SCORE_MIN', 'KYC_REQUIRED'].includes(r.rule_type as any)
+      (r) => !r.passed && ['CREDIT_SCORE_MIN', 'KYC_REQUIRED'].includes(r.rule_type as any),
     );
 
     const approved = criticalRulesFailed.length === 0 && passed > failed;
@@ -236,11 +244,7 @@ export class LoanService {
       const graceRule = ruleResults.find((result) => result.rule_type === 'GRACE_PERIOD');
       const graceMonths = Number(graceRule?.actions.find((action) => action.action === 'grace_months')?.value || 0);
 
-      const monthlyPayment = calculatePMT(
-        loan.principal_amount,
-        monthlyRate,
-        loan.term_months
-      );
+      const monthlyPayment = calculatePMT(loan.principal_amount, monthlyRate, loan.term_months);
 
       loan.status = LoanStatus.APPROVED;
       loan.monthly_rate = monthlyRate;
@@ -266,7 +270,9 @@ export class LoanService {
         },
       });
 
-      console.log(`✓ Loan approved: ${loan.id} (Monthly: ${monthlyPayment.toFixed(2)}, Rate: ${(monthlyRate * 100).toFixed(2)}%)`);
+      console.log(
+        `✓ Loan approved: ${loan.id} (Monthly: ${monthlyPayment.toFixed(2)}, Rate: ${(monthlyRate * 100).toFixed(2)}%)`,
+      );
     } else {
       loan.status = LoanStatus.REJECTED;
       loan.updated_at = new Date();
@@ -304,7 +310,11 @@ export class LoanService {
     tenantId: string,
     loan: Loan,
     options: { idempotencyKey?: string } = {},
-  ): Promise<{ success: boolean; disbursement_id: string; idempotent?: boolean }> {
+  ): Promise<{
+    success: boolean;
+    disbursement_id: string;
+    idempotent?: boolean;
+  }> {
     if (loan.status !== LoanStatus.APPROVED) {
       const replay = options.idempotencyKey
         ? await this.store.getTransactionByIdempotencyKey(tenantId, options.idempotencyKey)
@@ -348,6 +358,15 @@ export class LoanService {
       loan.maturity_date.setMonth(loan.maturity_date.getMonth() + loan.term_months);
       loan.updated_at = new Date();
       await this.store.saveLoan(tenantId, loan);
+      await this.outbox.append(
+        this.domainEvents.loanDisbursed({
+          tenantId,
+          loan,
+          transactionId: result.transaction_id,
+          currency: 'MZN',
+          idempotencyKey: options.idempotencyKey,
+        }),
+      );
       this.auditTrail.record({
         tenant_id: tenantId,
         action: 'loan.disbursed',
@@ -397,7 +416,13 @@ export class LoanService {
     loan: Loan,
     paymentAmount: number,
     options: { idempotencyKey?: string } = {},
-  ): Promise<{ success: boolean; principal_paid: number; interest_paid: number; balance_remaining: number; idempotent?: boolean }> {
+  ): Promise<{
+    success: boolean;
+    principal_paid: number;
+    interest_paid: number;
+    balance_remaining: number;
+    idempotent?: boolean;
+  }> {
     if (loan.status !== LoanStatus.ACTIVE && loan.status !== LoanStatus.DEFAULTED) {
       throw new Error(`Cannot process payment for loan in ${loan.status} status`);
     }
@@ -485,12 +510,7 @@ export class LoanService {
   /**
    * Generate comparison scenarios (for customer to choose terms)
    */
-  generateLoanScenarios(
-    principal: number,
-    minRate: number,
-    maxRate: number,
-    months: number
-  ): Array<any> {
+  generateLoanScenarios(principal: number, minRate: number, maxRate: number, months: number): Array<any> {
     const minMonthlyRate = getMonthlyRateFromAPR(minRate);
     const maxMonthlyRate = getMonthlyRateFromAPR(maxRate);
 
@@ -499,7 +519,7 @@ export class LoanService {
       minMonthlyRate,
       maxMonthlyRate,
       months,
-      5  // 5 scenarios
+      5, // 5 scenarios
     );
   }
 
