@@ -203,7 +203,9 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     console.log(`✓ Chart of Accounts initialized: ${coa.length} accounts\n`);
 
     // Disburse loan
-    const disburse = await loanService.disburseLoan(tenantId, loan);
+    const disburse = await loanService.disburseLoan(tenantId, loan, {
+      idempotencyKey: `idem_disburse_act_${loan.id}`,
+    });
     expect(disburse.success).toBe(true);
 
     console.log(`✓ Loan Disbursed\n`);
@@ -298,14 +300,18 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
       employment_years: 5,
     });
 
-    await loanService.disburseLoan(tenantId, loan);
+    await loanService.disburseLoan(tenantId, loan, {
+      idempotencyKey: `idem_disburse_payment_${loan.id}`,
+    });
 
     // Initialize GL
     await ledgerService.initializeChartOfAccounts(tenantId);
 
     // Process payment
     console.log('Customer payment received: 2,500 MZN\n');
-    const payment = await loanService.processLoanPayment(tenantId, loan, 2500);
+    const payment = await loanService.processLoanPayment(tenantId, loan, 2500, {
+      idempotencyKey: `idem_payment_post_${loan.id}`,
+    });
 
     expect(payment.success).toBe(true);
     expect(payment.principal_paid).toBeGreaterThan(0);
@@ -366,25 +372,46 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     const firstDisbursement = await loanService.disburseLoan(tenantId, loan, {
       idempotencyKey: disbursementKey,
     });
+    (outboxService as any).memory.clear();
     const secondDisbursement = await loanService.disburseLoan(tenantId, loan, {
       idempotencyKey: disbursementKey,
     });
+    const disbursementEventsAfterReplay = await outboxService.list(tenantId);
 
     expect(firstDisbursement.disbursement_id).toBe(secondDisbursement.disbursement_id);
     expect(secondDisbursement.idempotent).toBe(true);
+    expect(countLoanEvents(disbursementEventsAfterReplay, loan.id, 'lending.loan_disbursed')).toBe(1);
 
     const paymentKey = `idem_payment_${loan.id}`;
     const firstPayment = await loanService.processLoanPayment(tenantId, loan, 2500, { idempotencyKey: paymentKey });
     const principalAfterFirstPayment = loan.total_paid_principal;
     const paymentEventsAfterFirstPayment = await outboxService.list(tenantId);
-    const secondPayment = await loanService.processLoanPayment(tenantId, loan, 2500, { idempotencyKey: paymentKey });
+    const firstPaymentEvent = paymentEventsAfterFirstPayment.find(
+      (event) => event.envelope.event_type === 'lending.payment_posted' && event.envelope.aggregate.id === loan.id,
+    );
+    (outboxService as any).memory.clear();
+    const secondPayment = await loanService.processLoanPayment(tenantId, loan, 9999, { idempotencyKey: paymentKey });
     const paymentEventsAfterReplay = await outboxService.list(tenantId);
 
     expect(secondPayment.idempotent).toBe(true);
     expect(secondPayment.principal_paid).toBe(firstPayment.principal_paid);
     expect(loan.total_paid_principal).toBe(principalAfterFirstPayment);
-    expect(countLoanEvents(paymentEventsAfterReplay, loan.id, 'lending.payment_posted')).toBe(
-      countLoanEvents(paymentEventsAfterFirstPayment, loan.id, 'lending.payment_posted'),
+    expect(firstPaymentEvent?.envelope.aggregate.version).toBe(loan.version);
+    expect(countLoanEvents(paymentEventsAfterReplay, loan.id, 'lending.payment_posted')).toBe(1);
+    const replayedPaymentEvent = paymentEventsAfterReplay.find(
+      (event) => event.envelope.event_type === 'lending.payment_posted',
+    );
+    expect(replayedPaymentEvent?.envelope.payload.money).toEqual({ amount: '2500.00', currency: 'MZN' });
+
+    await loanService.processLoanPayment(tenantId, loan, 1000, {
+      idempotencyKey: `idem_payment_second_${loan.id}`,
+    });
+    const paymentEventsAfterSecondPayment = (await outboxService.list(tenantId)).filter(
+      (event) => event.envelope.event_type === 'lending.payment_posted' && event.envelope.aggregate.id === loan.id,
+    );
+    expect(paymentEventsAfterSecondPayment).toHaveLength(2);
+    expect(paymentEventsAfterSecondPayment[1].envelope.aggregate.version).toBeGreaterThan(
+      paymentEventsAfterSecondPayment[0].envelope.aggregate.version,
     );
   });
 

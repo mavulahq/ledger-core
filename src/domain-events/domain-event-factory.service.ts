@@ -47,7 +47,7 @@ export class DomainEventFactory {
       metadata: {
         producer: 'fengine',
         data_classification: 'restricted',
-        schema_uri: 'contracts/domain-events/payloads/lending.loan_disbursed.v1.schema.json',
+        schema_uri: 'contracts/domain-events/event-envelope.schema.json',
       },
     };
   }
@@ -104,14 +104,17 @@ export class DomainEventFactory {
       metadata: {
         producer: 'fengine',
         data_classification: 'restricted',
-        schema_uri: 'contracts/domain-events/payloads/lending.payment_posted.v1.schema.json',
+        schema_uri: 'contracts/domain-events/event-envelope.schema.json',
       },
     };
   }
 
   private aggregateVersion(loan: Loan): number {
+    if (Number.isInteger(loan.version) && loan.version > 0) {
+      return loan.version;
+    }
     if (loan.updated_at instanceof Date) {
-      return Math.max(1, Math.floor(loan.updated_at.getTime() / 1000));
+      return Math.max(1, loan.updated_at.getTime());
     }
     return 1;
   }

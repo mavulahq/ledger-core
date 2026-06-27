@@ -47,6 +47,7 @@ export enum LoanType {
 
 export interface Loan {
   id: string;
+  version: number;
   tenant_id: string;
   customer_id: string;
   product_id: string;
@@ -153,6 +154,7 @@ export class LoanService {
 
     const loan: Loan = {
       id: loanId,
+      version: 1,
       tenant_id: tenantId,
       customer_id: application.customer_id,
       product_id: application.product_id,
@@ -255,7 +257,7 @@ export class LoanService {
       loan.origination_fee_amount = loan.principal_amount * (loan.origination_fee_percent / 100);
       loan.grace_months = graceMonths;
       loan.approval_date = new Date();
-      loan.updated_at = new Date();
+      this.bumpLoanVersion(loan);
       await this.store.saveLoan(tenantId, loan);
       this.auditTrail.record({
         tenant_id: tenantId,
@@ -275,7 +277,7 @@ export class LoanService {
       );
     } else {
       loan.status = LoanStatus.REJECTED;
-      loan.updated_at = new Date();
+      this.bumpLoanVersion(loan);
       await this.store.saveLoan(tenantId, loan);
       this.auditTrail.record({
         tenant_id: tenantId,
@@ -315,11 +317,14 @@ export class LoanService {
     disbursement_id: string;
     idempotent?: boolean;
   }> {
+    const idempotencyKey = this.requireIdempotencyKey('loan disbursement', options.idempotencyKey);
+
     if (loan.status !== LoanStatus.APPROVED) {
-      const replay = options.idempotencyKey
-        ? await this.store.getTransactionByIdempotencyKey(tenantId, options.idempotencyKey)
-        : undefined;
-      if (replay?.metadata?.settlement_result?.posting_status === 'SUCCESS') {
+      const replay = await this.store.getTransactionByIdempotencyKey(tenantId, idempotencyKey);
+      const settlement = replay?.metadata?.settlement_result;
+      if (settlement?.posting_status === 'SUCCESS') {
+        const persistedLoan = (await this.store.getLoan(tenantId, loan.id)) || loan;
+        await this.ensureLoanDisbursedOutbox(tenantId, persistedLoan, settlement.transaction_id || replay.id, idempotencyKey);
         return {
           success: true,
           disbursement_id: replay.id,
@@ -338,11 +343,13 @@ export class LoanService {
       principal: loan.principal_amount,
       originationFee: loan.origination_fee_amount,
       currency: 'MZN',
-      idempotencyKey: options.idempotencyKey,
+      idempotencyKey,
     });
 
     if (result.posting_status === 'SUCCESS') {
       if (result.idempotent) {
+        const persistedLoan = (await this.store.getLoan(tenantId, loan.id)) || loan;
+        await this.ensureLoanDisbursedOutbox(tenantId, persistedLoan, result.transaction_id, idempotencyKey);
         return {
           success: true,
           disbursement_id: result.transaction_id,
@@ -356,17 +363,9 @@ export class LoanService {
       loan.remaining_balance = loan.principal_amount;
       loan.maturity_date = new Date();
       loan.maturity_date.setMonth(loan.maturity_date.getMonth() + loan.term_months);
-      loan.updated_at = new Date();
+      this.bumpLoanVersion(loan);
       await this.store.saveLoan(tenantId, loan);
-      await this.outbox.append(
-        this.domainEvents.loanDisbursed({
-          tenantId,
-          loan,
-          transactionId: result.transaction_id,
-          currency: 'MZN',
-          idempotencyKey: options.idempotencyKey,
-        }),
-      );
+      await this.ensureLoanDisbursedOutbox(tenantId, loan, result.transaction_id, idempotencyKey);
       this.auditTrail.record({
         tenant_id: tenantId,
         action: 'loan.disbursed',
@@ -423,6 +422,28 @@ export class LoanService {
     balance_remaining: number;
     idempotent?: boolean;
   }> {
+    const idempotencyKey = this.requireIdempotencyKey('loan payment', options.idempotencyKey);
+    const replay = await this.store.getTransactionByIdempotencyKey(tenantId, idempotencyKey);
+    const settlement = replay?.metadata?.settlement_result;
+    if (settlement?.posting_status === 'SUCCESS' && settlement.allocation) {
+      const persistedLoan = (await this.store.getLoan(tenantId, loan.id)) || loan;
+      await this.ensurePaymentPostedOutbox(
+        tenantId,
+        persistedLoan,
+        settlement.transaction_id || replay.id,
+        Number(replay.amount),
+        settlement.allocation,
+        idempotencyKey,
+      );
+      return {
+        success: true,
+        principal_paid: settlement.allocation.principal_payment,
+        interest_paid: settlement.allocation.interest_payment,
+        balance_remaining: Math.max(settlement.allocation.balance_after, 0),
+        idempotent: true,
+      };
+    }
+
     if (loan.status !== LoanStatus.ACTIVE && loan.status !== LoanStatus.DEFAULTED) {
       throw new Error(`Cannot process payment for loan in ${loan.status} status`);
     }
@@ -447,11 +468,20 @@ export class LoanService {
       interestDue,
       feesDue: feeDue,
       currentBalance: loan.remaining_balance,
-      idempotencyKey: options.idempotencyKey,
+      idempotencyKey,
     });
 
     if (result.posting_status === 'SUCCESS') {
       if (result.idempotent && result.allocation) {
+        const persistedLoan = (await this.store.getLoan(tenantId, loan.id)) || loan;
+        await this.ensurePaymentPostedOutbox(
+          tenantId,
+          persistedLoan,
+          result.transaction_id,
+          paymentAmount,
+          result.allocation,
+          idempotencyKey,
+        );
         return {
           success: true,
           principal_paid: result.allocation.principal_payment,
@@ -475,24 +505,13 @@ export class LoanService {
       loan.total_paid_interest += interestPaid;
       loan.total_paid_fees += feePaid;
       loan.remaining_balance = allocation.balance_after;
-      loan.updated_at = new Date();
 
       if (loan.remaining_balance <= 0) {
         loan.status = LoanStatus.PAID_UP;
       }
+      this.bumpLoanVersion(loan);
       await this.store.saveLoan(tenantId, loan);
-      await this.outbox.append(
-        this.domainEvents.lendingPaymentPosted({
-          tenantId,
-          loan,
-          transactionId: result.transaction_id,
-          sourceAccountId: `CUST_${loan.customer_id}`,
-          paymentAmount,
-          currency: 'MZN',
-          allocation,
-          idempotencyKey: options.idempotencyKey,
-        }),
-      );
+      await this.ensurePaymentPostedOutbox(tenantId, loan, result.transaction_id, paymentAmount, allocation, idempotencyKey);
       this.auditTrail.record({
         tenant_id: tenantId,
         action: 'loan.payment.recorded',
@@ -517,6 +536,62 @@ export class LoanService {
     }
 
     throw new Error(`Payment failed: ${result.error}`);
+  }
+
+  private requireIdempotencyKey(operation: string, key?: string): string {
+    if (!key?.trim()) {
+      throw new Error(`${operation} idempotencyKey is required`);
+    }
+    return key;
+  }
+
+  private bumpLoanVersion(loan: Loan): void {
+    loan.version = Math.max(1, Number(loan.version || 1)) + 1;
+    loan.updated_at = new Date();
+  }
+
+  private async ensureLoanDisbursedOutbox(
+    tenantId: string,
+    loan: Loan,
+    transactionId: string,
+    idempotencyKey: string,
+  ): Promise<void> {
+    await this.outbox.append(
+      this.domainEvents.loanDisbursed({
+        tenantId,
+        loan,
+        transactionId,
+        currency: 'MZN',
+        idempotencyKey,
+      }),
+    );
+  }
+
+  private async ensurePaymentPostedOutbox(
+    tenantId: string,
+    loan: Loan,
+    transactionId: string,
+    paymentAmount: number,
+    allocation: {
+      principal_payment: number;
+      interest_payment: number;
+      fee_payment: number;
+      balance_after: number;
+    },
+    idempotencyKey: string,
+  ): Promise<void> {
+    await this.outbox.append(
+      this.domainEvents.lendingPaymentPosted({
+        tenantId,
+        loan,
+        transactionId,
+        sourceAccountId: `CUST_${loan.customer_id}`,
+        paymentAmount,
+        currency: 'MZN',
+        allocation,
+        idempotencyKey,
+      }),
+    );
   }
 
   /**

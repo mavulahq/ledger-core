@@ -37,7 +37,7 @@ export class DomainOutboxPublisherService implements OnModuleInit, OnModuleDestr
         await this.queue.enqueueDomainEvent(record.envelope, {
           max_attempts: record.max_attempts,
         });
-        await this.outbox.markPublished(record.envelope.event_id);
+        await this.outbox.markPublished(record);
         published += 1;
       } catch (error) {
         await this.outbox.markPublishFailed(record, error as Error);

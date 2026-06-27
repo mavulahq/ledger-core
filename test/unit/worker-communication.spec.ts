@@ -170,6 +170,66 @@ describe('fengine worker communication', () => {
     expect(schemas.executeWorkflow).toHaveBeenCalledTimes(1);
   });
 
+  it('does not let an expired outbox publisher complete a reclaimed record', async () => {
+    const outbox = new DomainOutboxService({ isConfigured: false } as any);
+    const event = new DomainEventFactory().loanDisbursed({
+      tenantId: 'tenant_001',
+      loan: approvedLoan(),
+      transactionId: 'disburse_loan_003',
+      currency: 'MZN',
+      idempotencyKey: 'idem_disburse_loan_003',
+    });
+
+    await outbox.append(event);
+    const [claimed] = await outbox.claimPending(1);
+    (outbox as any).memory.set(event.event_id, {
+      ...claimed,
+      locked_by: 'fengine-outbox-new-owner',
+    });
+
+    await outbox.markPublished(claimed);
+
+    await expect(outbox.list('tenant_001')).resolves.toEqual([
+      expect.objectContaining({
+        status: 'PUBLISHING',
+        locked_by: 'fengine-outbox-new-owner',
+      }),
+    ]);
+  });
+
+  it('reclaims stale inbox processing records', async () => {
+    process.env.FENGINE_INBOX_PROCESSING_LEASE_MS = '1';
+    const inbox = new DomainInboxService({ isConfigured: false } as any);
+    const event = new DomainEventFactory().lendingPaymentPosted({
+      tenantId: 'tenant_001',
+      loan: approvedLoan(),
+      transactionId: 'txn_loan_003',
+      sourceAccountId: 'CUST_cust_001',
+      paymentAmount: 2500,
+      currency: 'MZN',
+      allocation: {
+        principal_payment: 1375,
+        interest_payment: 625,
+        fee_payment: 500,
+        balance_after: 23625,
+      },
+      idempotencyKey: 'idem_payment_loan_003',
+    });
+
+    const first = await inbox.startProcessing(event, 'workflow-dispatch');
+    (inbox as any).memory.set(`${event.event_id}:workflow-dispatch`, {
+      ...first.record,
+      status: 'PROCESSING',
+      updated_at: new Date(Date.now() - 1000),
+    });
+
+    await expect(inbox.startProcessing(event, 'workflow-dispatch')).resolves.toMatchObject({
+      started: true,
+      record: expect.objectContaining({ status: 'PROCESSING' }),
+    });
+    delete process.env.FENGINE_INBOX_PROCESSING_LEASE_MS;
+  });
+
   it('rejects missing or invalid internal API keys', () => {
     const guard = new InternalApiKeyGuard();
     const context = (key?: string) =>
@@ -190,6 +250,7 @@ describe('fengine worker communication', () => {
 function approvedLoan(): Loan {
   return {
     id: 'loan_001',
+    version: 3,
     tenant_id: 'tenant_001',
     customer_id: 'cust_001',
     product_id: 'prod_loan_001',
