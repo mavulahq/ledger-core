@@ -310,6 +310,26 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     expect(payment.success).toBe(true);
     expect(payment.principal_paid).toBeGreaterThan(0);
     expect(payment.interest_paid).toBeGreaterThan(0);
+    await expect(outboxService.list(tenantId)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: 'PENDING',
+          envelope: expect.objectContaining({
+            event_type: 'lending.payment_posted',
+            tenant_id: tenantId,
+            aggregate: expect.objectContaining({ type: 'loan', id: loan.id }),
+            payload: expect.objectContaining({
+              money: { amount: '2500.00', currency: 'MZN' },
+              allocation: expect.objectContaining({
+                principal: payment.principal_paid.toFixed(2),
+                interest: payment.interest_paid.toFixed(2),
+              }),
+              balance_after: payment.balance_remaining.toFixed(2),
+            }),
+          }),
+        }),
+      ]),
+    );
 
     console.log(`✓ Payment Posted\n`);
     console.log(`Payment Allocation:`);
@@ -356,11 +376,16 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     const paymentKey = `idem_payment_${loan.id}`;
     const firstPayment = await loanService.processLoanPayment(tenantId, loan, 2500, { idempotencyKey: paymentKey });
     const principalAfterFirstPayment = loan.total_paid_principal;
+    const paymentEventsAfterFirstPayment = await outboxService.list(tenantId);
     const secondPayment = await loanService.processLoanPayment(tenantId, loan, 2500, { idempotencyKey: paymentKey });
+    const paymentEventsAfterReplay = await outboxService.list(tenantId);
 
     expect(secondPayment.idempotent).toBe(true);
     expect(secondPayment.principal_paid).toBe(firstPayment.principal_paid);
     expect(loan.total_paid_principal).toBe(principalAfterFirstPayment);
+    expect(countLoanEvents(paymentEventsAfterReplay, loan.id, 'lending.payment_posted')).toBe(
+      countLoanEvents(paymentEventsAfterFirstPayment, loan.id, 'lending.payment_posted'),
+    );
   });
 
   it('Complete OODA cycle summary', async () => {
@@ -405,3 +430,8 @@ RESULT: Complete loan lifecycle in < 500ms
     expect(true).toBe(true);
   });
 });
+
+function countLoanEvents(events: any[], loanId: string, eventType: string): number {
+  return events.filter((event) => event.envelope.event_type === eventType && event.envelope.aggregate.id === loanId)
+    .length;
+}

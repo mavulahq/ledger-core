@@ -481,6 +481,18 @@ export class LoanService {
         loan.status = LoanStatus.PAID_UP;
       }
       await this.store.saveLoan(tenantId, loan);
+      await this.outbox.append(
+        this.domainEvents.lendingPaymentPosted({
+          tenantId,
+          loan,
+          transactionId: result.transaction_id,
+          sourceAccountId: `CUST_${loan.customer_id}`,
+          paymentAmount,
+          currency: 'MZN',
+          allocation,
+          idempotencyKey: options.idempotencyKey,
+        }),
+      );
       this.auditTrail.record({
         tenant_id: tenantId,
         action: 'loan.payment.recorded',

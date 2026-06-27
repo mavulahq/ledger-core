@@ -65,6 +65,21 @@ export interface LoanDisbursedPayload {
   };
 }
 
+export interface LendingPaymentPostedPayload {
+  transaction_id: string;
+  source_account_id: string;
+  money: {
+    amount: string;
+    currency: string;
+  };
+  allocation: {
+    principal: string;
+    interest: string;
+    fees: string;
+  };
+  balance_after: string;
+}
+
 export function assertDomainEventEnvelope(value: any): asserts value is DomainEventEnvelope {
   if (!value || typeof value !== 'object') {
     throw new Error('domain event envelope must be an object');
