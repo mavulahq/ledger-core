@@ -104,37 +104,39 @@ export class DomainOutboxService {
         });
     }
 
-    await this.enterSystemContext();
     const lockedUntil = new Date(Date.now() + this.leaseMs());
-    const rows = await this.prisma.db.$queryRaw<any[]>`
-      UPDATE "domain_outbox_events"
-      SET
-        "status" = 'PUBLISHING',
-        "attempts" = "attempts" + 1,
-        "lockedUntil" = ${lockedUntil},
-        "lockedBy" = ${this.workerId},
-        "updatedAt" = now()
-      WHERE "eventId" IN (
-        SELECT "eventId" FROM "domain_outbox_events"
-        WHERE (
-          ("status" = 'PENDING' AND "availableAt" <= now())
-          OR ("status" = 'PUBLISHING' AND "lockedUntil" <= now())
+    const rows = await this.prisma.db.$transaction(async (tx: any) => {
+      await tx.$executeRaw`SELECT set_config('app.current_tenant_id', '*', true)`;
+      return tx.$queryRaw`
+        UPDATE "domain_outbox_events"
+        SET
+          "status" = 'PUBLISHING',
+          "attempts" = "attempts" + 1,
+          "lockedUntil" = ${lockedUntil},
+          "lockedBy" = ${this.workerId},
+          "updatedAt" = now()
+        WHERE "eventId" IN (
+          SELECT "eventId" FROM "domain_outbox_events"
+          WHERE (
+            ("status" = 'PENDING' AND "availableAt" <= now())
+            OR ("status" = 'PUBLISHING' AND "lockedUntil" <= now())
+          )
+          ORDER BY "createdAt" ASC
+          LIMIT ${limit}
+          FOR UPDATE SKIP LOCKED
         )
-        ORDER BY "createdAt" ASC
-        LIMIT ${limit}
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING *
-    `;
+        RETURNING *
+      ` as Promise<any[]>;
+    });
     return rows.map((row) => this.fromRow(row));
   }
 
-  async markPublished(eventId: string): Promise<void> {
+  async markPublished(record: DomainOutboxRecord): Promise<void> {
     if (!this.prisma.isConfigured) {
-      const record = this.memory.get(eventId);
-      if (record) {
-        this.memory.set(eventId, {
-          ...record,
+      const current = this.memory.get(record.envelope.event_id);
+      if (current?.status === 'PUBLISHING' && current.locked_by === record.locked_by) {
+        this.memory.set(record.envelope.event_id, {
+          ...current,
           status: 'PUBLISHED',
           published_at: new Date(),
           locked_until: undefined,
@@ -149,7 +151,9 @@ export class DomainOutboxService {
     await this.prisma.db.$executeRaw`
       UPDATE "domain_outbox_events"
       SET "status" = 'PUBLISHED', "publishedAt" = now(), "lockedUntil" = NULL, "lockedBy" = NULL, "updatedAt" = now()
-      WHERE "eventId" = ${eventId}
+      WHERE "eventId" = ${record.envelope.event_id}
+        AND "status" = 'PUBLISHING'
+        AND "lockedBy" = ${record.locked_by || null}
     `;
   }
 
@@ -185,6 +189,8 @@ export class DomainOutboxService {
         "lastError" = ${message},
         "updatedAt" = now()
       WHERE "eventId" = ${record.envelope.event_id}
+        AND "status" = 'PUBLISHING'
+        AND "lockedBy" = ${record.locked_by || null}
     `;
   }
 
