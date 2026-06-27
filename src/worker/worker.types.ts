@@ -1,3 +1,5 @@
+import type { DomainEventEnvelope } from '../domain-events/domain-event.types';
+
 export type WorkerJobStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
 
 export interface EnqueueEngineEventInput {
@@ -28,4 +30,9 @@ export interface EngineEventCallback {
   tenant_id: string;
   event_type: string;
   payload?: Record<string, any>;
+}
+
+export interface DomainEventWorkerCallback {
+  job_id?: string;
+  event: DomainEventEnvelope;
 }

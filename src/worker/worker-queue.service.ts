@@ -1,6 +1,7 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { Job, JobsOptions, Queue } from 'bullmq';
+import { DomainEventEnvelope } from '../domain-events/domain-event.types';
 import { EngineWorkerJob, EnqueueEngineEventInput } from './worker.types';
 
 @Injectable()
@@ -47,6 +48,22 @@ export class WorkerQueueService implements OnModuleDestroy {
     };
     await this.queue.add(job.type, job, options);
     return job;
+  }
+
+  async enqueueDomainEvent(
+    event: DomainEventEnvelope,
+    options: { max_attempts?: number } = {},
+  ): Promise<EngineWorkerJob> {
+    return this.enqueue({
+      tenant_id: event.tenant_id,
+      event_type: event.event_type,
+      payload: {
+        domain_event: true,
+        event,
+      },
+      idempotency_key: event.event_id,
+      max_attempts: options.max_attempts,
+    });
   }
 
   async get(jobId: string): Promise<EngineWorkerJob | null> {

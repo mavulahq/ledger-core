@@ -20,22 +20,24 @@ model Account {
 }
 
 model Tenant {
-  id              String               @id
-  name            String?
-  jurisdiction    String?
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
-  accounts        Account[]
-  products        Product[]
-  tenantConfigs   TenantConfig[]
-  loans           Loan[]
-  transactions    FinancialTransaction[]
-  ledgerAccounts  LedgerAccount[]
-  journalEntries  JournalEntry[]
-  schemas         CustomEntitySchema[]
-  workflows       WorkflowDefinition[]
-  rules           Rule[]
-  auditTrail      AuditTrailEvent[]
+  id             String                 @id
+  name           String?
+  jurisdiction   String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  accounts       Account[]
+  products       Product[]
+  tenantConfigs  TenantConfig[]
+  loans          Loan[]
+  transactions   FinancialTransaction[]
+  ledgerAccounts LedgerAccount[]
+  journalEntries JournalEntry[]
+  schemas        CustomEntitySchema[]
+  workflows      WorkflowDefinition[]
+  rules          Rule[]
+  auditTrail     AuditTrailEvent[]
+  domainOutbox   DomainOutboxEvent[]
+  domainInbox    DomainInboxEvent[]
 
   @@map("tenants")
 }
@@ -51,8 +53,8 @@ model Product {
   updatedAt DateTime @default(now()) @updatedAt
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@index([tenantId])
   @@unique([tenantId, id])
+  @@index([tenantId])
   @@map("products")
 }
 
@@ -68,59 +70,59 @@ model TenantConfig {
 }
 
 model Loan {
-  id        String   @id
-  tenantId  String
+  id         String   @id
+  tenantId   String
   customerId String
-  productId String
-  status    String
-  data      Json
-  createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  productId  String
+  status     String
+  data       Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  @@unique([tenantId, id])
   @@index([tenantId])
   @@index([tenantId, customerId])
-  @@unique([tenantId, id])
   @@map("loans")
 }
 
 model FinancialTransaction {
-  id        String   @id
-  tenantId  String
-  type      String
-  status    String
-  amount    Decimal
-  currency  String
-  loanId    String?
+  id             String    @id
+  tenantId       String
+  type           String
+  status         String
+  amount         Decimal
+  currency       String
+  loanId         String?
   idempotencyKey String?
-  data      Json
-  createdAt DateTime @default(now())
-  postedAt  DateTime?
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  data           Json
+  createdAt      DateTime  @default(now())
+  postedAt       DateTime?
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@index([tenantId])
-  @@index([tenantId, loanId])
   @@unique([tenantId, id])
   @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([tenantId, loanId])
   @@map("financial_transactions")
 }
 
 model LedgerAccount {
-  id             String   @id @default(cuid())
-  tenantId       String
-  accountCode    String
-  accountName    String
-  accountClass   String
+  id              String   @id @default(cuid())
+  tenantId        String
+  accountCode     String
+  accountName     String
+  accountClass    String
   accountSubclass String
-  balanceDebit   Decimal  @default("0")
-  balanceCredit  Decimal  @default("0")
-  currency       String
-  isActive       Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  balanceDebit    Decimal  @default("0")
+  balanceCredit   Decimal  @default("0")
+  currency        String
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@index([tenantId])
   @@unique([tenantId, accountCode])
+  @@index([tenantId])
   @@map("ledger_accounts")
 }
 
@@ -138,9 +140,9 @@ model JournalEntry {
   createdAt     DateTime @default(now())
   tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  @@unique([tenantId, id])
   @@index([tenantId])
   @@index([tenantId, transactionId])
-  @@unique([tenantId, id])
   @@map("journal_entries")
 }
 
@@ -154,8 +156,8 @@ model CustomEntitySchema {
   updatedAt   DateTime @default(now()) @updatedAt
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@index([tenantId])
   @@unique([tenantId, id])
+  @@index([tenantId])
   @@map("custom_entity_schemas")
 }
 
@@ -170,9 +172,9 @@ model WorkflowDefinition {
   updatedAt DateTime @default(now()) @updatedAt
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  @@unique([tenantId, id])
   @@index([tenantId])
   @@index([tenantId, trigger])
-  @@unique([tenantId, id])
   @@map("workflow_definitions")
 }
 
@@ -190,9 +192,9 @@ model Rule {
   updatedAt DateTime @default(now()) @updatedAt
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  @@unique([tenantId, id])
   @@index([tenantId])
   @@index([tenantId, productId])
-  @@unique([tenantId, id])
   @@map("rules")
 }
 
@@ -211,4 +213,57 @@ model AuditTrailEvent {
   @@index([tenantId])
   @@index([tenantId, entityType, entityId])
   @@map("audit_trail_events")
+}
+
+model DomainOutboxEvent {
+  eventId          String    @id
+  tenantId         String
+  eventType        String
+  eventVersion     Int
+  occurredAt       DateTime
+  aggregateType    String
+  aggregateId      String
+  aggregateVersion Int
+  correlationId    String
+  causationId      String
+  idempotencyKey   String?
+  payload          Json
+  metadata         Json
+  status           String    @default("PENDING")
+  attempts         Int       @default(0)
+  maxAttempts      Int       @default(3)
+  availableAt      DateTime  @default(now())
+  lockedUntil      DateTime?
+  lockedBy         String?
+  publishedAt      DateTime?
+  failedAt         DateTime?
+  lastError        String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now()) @updatedAt
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, status, availableAt])
+  @@index([tenantId, aggregateType, aggregateId])
+  @@index([eventType, eventVersion])
+  @@map("domain_outbox_events")
+}
+
+model DomainInboxEvent {
+  id           String    @id @default(cuid())
+  eventId      String
+  consumerName String
+  tenantId     String
+  status       String
+  processedAt  DateTime?
+  failedAt     DateTime?
+  lastError    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now()) @updatedAt
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, consumerName])
+  @@index([tenantId, status])
+  @@index([tenantId, eventId])
+  @@map("domain_inbox_events")
 }
