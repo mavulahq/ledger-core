@@ -143,6 +143,36 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     });
   });
 
+  it('serializes concurrent product configuration publications', async () => {
+    const productId = `prod_concurrent_${Date.now()}`;
+    const results = await Promise.all([
+      productConfigService.createOrUpdateProduct(tenantId, ProductType.LOAN, {
+        product_id: productId,
+        name: 'Concurrent Loan A',
+        enabled: true,
+      }),
+      productConfigService.createOrUpdateProduct(tenantId, ProductType.LOAN, {
+        product_id: productId,
+        name: 'Concurrent Loan B',
+        enabled: true,
+      }),
+    ]);
+    const versions = results.map((product) => product.version).sort((a, b) => a - b);
+    const events = (await outboxService.list(tenantId)).filter(
+      (event) =>
+        event.envelope.event_type === 'products.configuration_published' &&
+        event.envelope.aggregate.id === productId,
+    );
+    const eventVersions = events
+      .map((event) => event.envelope.aggregate.version)
+      .sort((a, b) => a - b);
+
+    expect(versions).toEqual([1, 2]);
+    expect(events).toHaveLength(2);
+    expect(eventVersions).toEqual([1, 2]);
+    expect(new Set(events.map((event) => event.envelope.idempotency_key)).size).toBe(2);
+  });
+
   it('[ORIENT] Rules Engine evaluates eligibility', async () => {
     // ORIENT: Apply business rules and decision logic
     console.log('\n=== PHASE 2: ORIENT ===');
