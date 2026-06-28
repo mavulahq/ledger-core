@@ -117,6 +117,8 @@ export interface ComplianceRule {
 
 @Injectable()
 export class ProductConfigService {
+  private readonly productLocks = new Map<string, Promise<void>>();
+
   constructor(
     private prisma: PrismaService,
     private store: FengineStoreService,
@@ -135,12 +137,99 @@ export class ProductConfigService {
     config: Partial<ProductSchema>,
   ): Promise<ProductSchema> {
     const productId = config.product_id || `prod_${productType.toLowerCase()}_${Date.now()}`;
-    const existing = await this.store.getProduct(tenantId, productId);
-    const now = new Date();
 
-    // Default configurations by product type
+    return this.withProductLock(tenantId, productId, async () => {
+      const product = this.prisma.isConfigured
+        ? await this.createOrUpdateConfiguredProduct(tenantId, productId, productType, config)
+        : await this.createOrUpdateMemoryProduct(tenantId, productId, productType, config);
+
+      this.recordProductUpsertAudit(tenantId, productId, productType, product);
+      console.log(`✓ Product created: ${productId} for tenant ${tenantId}`);
+      return product;
+    });
+  }
+
+  private async createOrUpdateMemoryProduct(
+    tenantId: string,
+    productId: string,
+    productType: ProductType,
+    config: Partial<ProductSchema>,
+  ): Promise<ProductSchema> {
+    const existing = await this.store.getProduct(tenantId, productId);
+    const product = this.buildProduct(tenantId, productId, productType, config, existing);
+    await this.store.saveProduct(tenantId, product);
+    await this.outbox.append(
+      this.domainEvents.productsConfigurationPublished({ tenantId, product }),
+    );
+    return product;
+  }
+
+  private async createOrUpdateConfiguredProduct(
+    tenantId: string,
+    productId: string,
+    productType: ProductType,
+    config: Partial<ProductSchema>,
+  ): Promise<ProductSchema> {
+    await this.prisma.ensureTenant(tenantId);
+
+    return this.prisma.db.$transaction(async (tx: any) => {
+      await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}), hashtext(${productId}))`;
+
+      const [existingRow] = (await tx.$queryRaw`
+        SELECT "config" FROM "products"
+        WHERE "tenantId" = ${tenantId} AND "id" = ${productId}
+        FOR UPDATE
+      `) as any[];
+      const existing = existingRow ? this.decodeProductConfig(existingRow.config) : undefined;
+      const product = this.buildProduct(tenantId, productId, productType, config, existing);
+      const event = this.domainEvents.productsConfigurationPublished({ tenantId, product });
+      const maxAttempts = Number(process.env.FENGINE_OUTBOX_MAX_ATTEMPTS || 3);
+
+      await tx.$executeRaw`
+        INSERT INTO "products" ("id", "tenantId", "type", "name", "enabled", "config", "updatedAt")
+        VALUES (${product.product_id}, ${tenantId}, ${product.type}, ${product.name}, ${product.enabled}, CAST(${JSON.stringify(product)} AS jsonb), now())
+        ON CONFLICT ("tenantId", "id") DO UPDATE SET
+          "type" = EXCLUDED."type",
+          "name" = EXCLUDED."name",
+          "enabled" = EXCLUDED."enabled",
+          "config" = EXCLUDED."config",
+          "updatedAt" = now()
+      `;
+
+      await tx.$executeRaw`
+        INSERT INTO "domain_outbox_events" (
+          "eventId", "tenantId", "eventType", "eventVersion", "occurredAt",
+          "aggregateType", "aggregateId", "aggregateVersion",
+          "correlationId", "causationId", "idempotencyKey",
+          "payload", "metadata", "status", "attempts", "maxAttempts", "availableAt", "updatedAt"
+        )
+        VALUES (
+          ${event.event_id}, ${event.tenant_id}, ${event.event_type}, ${event.event_version}, ${new Date(event.occurred_at)},
+          ${event.aggregate.type}, ${event.aggregate.id}, ${event.aggregate.version},
+          ${event.correlation_id}, ${event.causation_id}, ${event.idempotency_key || null},
+          CAST(${JSON.stringify(event.payload)} AS jsonb), CAST(${JSON.stringify(event.metadata)} AS jsonb),
+          'PENDING', 0, ${maxAttempts}, now(), now()
+        )
+        ON CONFLICT ("tenantId", "idempotencyKey") DO UPDATE SET
+          "updatedAt" = "domain_outbox_events"."updatedAt"
+      `;
+
+      return product;
+    });
+  }
+
+  private buildProduct(
+    tenantId: string,
+    productId: string,
+    productType: ProductType,
+    config: Partial<ProductSchema>,
+    existing?: ProductSchema,
+  ): ProductSchema {
+    const now = new Date();
     const defaults = this.getDefaultProductConfig(productType);
-    const merged = {
+
+    return {
       ...defaults,
       ...config,
       tenant_id: tenantId,
@@ -148,15 +237,22 @@ export class ProductConfigService {
       version: existing ? Math.max(1, Number(existing.version || 1)) + 1 : 1,
       created_at: existing?.created_at || config.created_at || now,
       updated_at: now,
-    };
+    } as ProductSchema;
+  }
 
-    // Store in PostgreSQL (tenant schema)
-    // In production, would use Prisma to persist to tenant_{id}.products table
-    const product = merged as ProductSchema;
-    await this.store.saveProduct(tenantId, product);
-    await this.outbox.append(
-      this.domainEvents.productsConfigurationPublished({ tenantId, product }),
-    );
+  private decodeProductConfig(value: any): ProductSchema {
+    if (typeof value === 'string') {
+      return JSON.parse(value) as ProductSchema;
+    }
+    return value as ProductSchema;
+  }
+
+  private recordProductUpsertAudit(
+    tenantId: string,
+    productId: string,
+    productType: ProductType,
+    product: ProductSchema,
+  ): void {
     this.auditTrail.record({
       tenant_id: tenantId,
       action: 'product.upserted',
@@ -165,9 +261,31 @@ export class ProductConfigService {
       phase: 'ACT',
       metadata: { productType, enabled: product.enabled },
     });
+  }
 
-    console.log(`✓ Product created: ${productId} for tenant ${tenantId}`);
-    return product;
+  private async withProductLock<T>(
+    tenantId: string,
+    productId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const key = `${tenantId}:${productId}`;
+    const previous = this.productLocks.get(key) || Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const chained = previous.catch(() => undefined).then(() => gate);
+    this.productLocks.set(key, chained);
+
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.productLocks.get(key) === chained) {
+        this.productLocks.delete(key);
+      }
+    }
   }
 
   /**
