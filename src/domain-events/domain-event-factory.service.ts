@@ -16,11 +16,13 @@ export class DomainEventFactory {
     currency: string;
     idempotencyKey?: string;
     occurredAt?: Date;
+    aggregateVersion?: number;
   }): DomainEventEnvelope<LoanDisbursedPayload> {
     const occurredAt = input.occurredAt || new Date();
     const eventId = `evt_${randomUUID()}`;
     const idempotencyKey =
-      input.idempotencyKey || `${input.tenantId}:${input.loan.id}:disbursement:${input.transactionId}`;
+      input.idempotencyKey ||
+      `${input.tenantId}:${input.loan.id}:disbursement:${input.transactionId}`;
 
     return {
       event_id: eventId,
@@ -31,7 +33,7 @@ export class DomainEventFactory {
       aggregate: {
         type: 'loan',
         id: input.loan.id,
-        version: this.aggregateVersion(input.loan),
+        version: this.aggregateVersion(input.loan, input.aggregateVersion),
       },
       correlation_id: `corr_${input.transactionId}`,
       causation_id: input.idempotencyKey || input.transactionId,
@@ -67,6 +69,7 @@ export class DomainEventFactory {
     };
     idempotencyKey?: string;
     occurredAt?: Date;
+    aggregateVersion?: number;
   }): DomainEventEnvelope<LendingPaymentPostedPayload> {
     const occurredAt = input.occurredAt || new Date();
     const eventId = `evt_${randomUUID()}`;
@@ -82,7 +85,7 @@ export class DomainEventFactory {
       aggregate: {
         type: 'loan',
         id: input.loan.id,
-        version: this.aggregateVersion(input.loan),
+        version: this.aggregateVersion(input.loan, input.aggregateVersion),
       },
       correlation_id: `corr_${input.transactionId}`,
       causation_id: input.idempotencyKey || input.transactionId,
@@ -109,7 +112,10 @@ export class DomainEventFactory {
     };
   }
 
-  private aggregateVersion(loan: Loan): number {
+  private aggregateVersion(loan: Loan, override?: number): number {
+    if (Number.isInteger(override) && override > 0) {
+      return override;
+    }
     if (Number.isInteger(loan.version) && loan.version > 0) {
       return loan.version;
     }

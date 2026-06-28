@@ -8,7 +8,11 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { LoanService, LoanType, LoanStatus } from '../src/loans/loan.service';
-import { TransactionService, TransactionType, TransactionStatus } from '../src/transactions/transaction.service';
+import {
+  TransactionService,
+  TransactionType,
+  TransactionStatus,
+} from '../src/transactions/transaction.service';
 import { RulesEngineService, RuleType } from '../src/rules-engine/rules-engine.service';
 import { LedgerService, AccountClass } from '../src/ledger/ledger.service';
 import { ProductConfigService, ProductType } from '../src/products/product-config.service';
@@ -172,7 +176,9 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     console.log(`  Total Interest: ${loan.total_interest.toFixed(2)} MZN`);
     console.log(`  Total Repayable: ${loan.total_repayable.toFixed(2)} MZN\n`);
 
-    console.log(`Rules Passed: ${approval.rules_passed}/${approval.rules_passed + approval.rules_failed}`);
+    console.log(
+      `Rules Passed: ${approval.rules_passed}/${approval.rules_passed + approval.rules_failed}`,
+    );
   });
 
   it('[ACT] Disburse loan and record GL entries', async () => {
@@ -213,7 +219,9 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     console.log(`  Transaction ID: ${disburse.disbursement_id}`);
     console.log(`  Amount Disbursed: ${loan.disbursed_amount} MZN`);
     console.log(`  Origination Fee: ${loan.origination_fee_amount.toFixed(2)} MZN`);
-    console.log(`  Net Amount: ${(loan.disbursed_amount - loan.origination_fee_amount).toFixed(2)} MZN\n`);
+    console.log(
+      `  Net Amount: ${(loan.disbursed_amount - loan.origination_fee_amount).toFixed(2)} MZN\n`,
+    );
 
     // Verify loan status
     expect(loan.status).toBe(LoanStatus.ACTIVE);
@@ -265,7 +273,9 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
 
     schedule.slice(0, 6).forEach((item) => {
       const dateStr =
-        item.payment_date instanceof Date ? item.payment_date.toISOString().split('T')[0] : item.payment_date;
+        item.payment_date instanceof Date
+          ? item.payment_date.toISOString().split('T')[0]
+          : item.payment_date;
 
       console.log(
         `${String(item.installment).padEnd(5)} | ${dateStr} | ` +
@@ -380,17 +390,25 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
 
     expect(firstDisbursement.disbursement_id).toBe(secondDisbursement.disbursement_id);
     expect(secondDisbursement.idempotent).toBe(true);
-    expect(countLoanEvents(disbursementEventsAfterReplay, loan.id, 'lending.loan_disbursed')).toBe(1);
+    expect(countLoanEvents(disbursementEventsAfterReplay, loan.id, 'lending.loan_disbursed')).toBe(
+      1,
+    );
 
     const paymentKey = `idem_payment_${loan.id}`;
-    const firstPayment = await loanService.processLoanPayment(tenantId, loan, 2500, { idempotencyKey: paymentKey });
+    const firstPayment = await loanService.processLoanPayment(tenantId, loan, 2500, {
+      idempotencyKey: paymentKey,
+    });
     const principalAfterFirstPayment = loan.total_paid_principal;
     const paymentEventsAfterFirstPayment = await outboxService.list(tenantId);
     const firstPaymentEvent = paymentEventsAfterFirstPayment.find(
-      (event) => event.envelope.event_type === 'lending.payment_posted' && event.envelope.aggregate.id === loan.id,
+      (event) =>
+        event.envelope.event_type === 'lending.payment_posted' &&
+        event.envelope.aggregate.id === loan.id,
     );
     (outboxService as any).memory.clear();
-    const secondPayment = await loanService.processLoanPayment(tenantId, loan, 9999, { idempotencyKey: paymentKey });
+    const secondPayment = await loanService.processLoanPayment(tenantId, loan, 9999, {
+      idempotencyKey: paymentKey,
+    });
     const paymentEventsAfterReplay = await outboxService.list(tenantId);
 
     expect(secondPayment.idempotent).toBe(true);
@@ -401,18 +419,78 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     const replayedPaymentEvent = paymentEventsAfterReplay.find(
       (event) => event.envelope.event_type === 'lending.payment_posted',
     );
-    expect(replayedPaymentEvent?.envelope.payload.money).toEqual({ amount: '2500.00', currency: 'MZN' });
+    expect(replayedPaymentEvent?.envelope.payload.money).toEqual({
+      amount: '2500.00',
+      currency: 'MZN',
+    });
 
     await loanService.processLoanPayment(tenantId, loan, 1000, {
       idempotencyKey: `idem_payment_second_${loan.id}`,
     });
     const paymentEventsAfterSecondPayment = (await outboxService.list(tenantId)).filter(
-      (event) => event.envelope.event_type === 'lending.payment_posted' && event.envelope.aggregate.id === loan.id,
+      (event) =>
+        event.envelope.event_type === 'lending.payment_posted' &&
+        event.envelope.aggregate.id === loan.id,
     );
     expect(paymentEventsAfterSecondPayment).toHaveLength(2);
     expect(paymentEventsAfterSecondPayment[1].envelope.aggregate.version).toBeGreaterThan(
       paymentEventsAfterSecondPayment[0].envelope.aggregate.version,
     );
+  });
+
+  it('repairs loan state before replaying a disbursement event', async () => {
+    const loan = await loanService.applyForLoan(tenantId, {
+      customer_id: customerId,
+      product_id: productId,
+      loan_type: LoanType.PERSONAL,
+      requested_amount: 25000,
+      requested_term_months: 12,
+      purpose: 'Disbursement recovery test',
+      metadata: {},
+    });
+
+    await loanService.approveLoan(tenantId, loan, {
+      credit_score: 650,
+      income: 120000,
+      employment_years: 5,
+    });
+    await ledgerService.initializeChartOfAccounts(tenantId);
+
+    const disbursementKey = `idem_disburse_repair_${loan.id}`;
+    const posted = await transactionService.processDisbursement({
+      tenantId,
+      customerId: loan.customer_id,
+      loanId: loan.id,
+      principal: loan.principal_amount,
+      originationFee: loan.origination_fee_amount,
+      currency: 'MZN',
+      idempotencyKey: disbursementKey,
+    });
+
+    expect(posted.posting_status).toBe('SUCCESS');
+    expect(loan.status).toBe(LoanStatus.APPROVED);
+    expect(loan.disbursed_amount).toBe(0);
+
+    const replayed = await loanService.disburseLoan(tenantId, loan, {
+      idempotencyKey: disbursementKey,
+    });
+    const repairedLoan = await loanService.getLoan(tenantId, loan.id);
+    const disbursementEvents = await outboxService.list(tenantId);
+    const repairedEvent = disbursementEvents.find(
+      (event) =>
+        event.envelope.event_type === 'lending.loan_disbursed' &&
+        event.envelope.aggregate.id === loan.id,
+    );
+
+    expect(replayed).toEqual({
+      success: true,
+      disbursement_id: posted.transaction_id,
+      idempotent: true,
+    });
+    expect(repairedLoan?.status).toBe(LoanStatus.ACTIVE);
+    expect(repairedLoan?.disbursed_amount).toBe(25000);
+    expect(repairedEvent?.envelope.payload.money).toEqual({ amount: '25000.00', currency: 'MZN' });
+    expect(repairedEvent?.envelope.aggregate.version).toBe(repairedLoan?.version);
   });
 
   it('Complete OODA cycle summary', async () => {
@@ -459,6 +537,7 @@ RESULT: Complete loan lifecycle in < 500ms
 });
 
 function countLoanEvents(events: any[], loanId: string, eventType: string): number {
-  return events.filter((event) => event.envelope.event_type === eventType && event.envelope.aggregate.id === loanId)
-    .length;
+  return events.filter(
+    (event) => event.envelope.event_type === eventType && event.envelope.aggregate.id === loanId,
+  ).length;
 }

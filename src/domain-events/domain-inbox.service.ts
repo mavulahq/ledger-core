@@ -52,19 +52,23 @@ export class DomainInboxService {
         return { started: true, record: inserted };
       }
 
-      const existing = await this.find(envelope.event_id, consumerName, tx);
-      if (!existing) {
-        throw new Error(`Inbox record not found after conflict for ${envelope.event_id}/${consumerName}`);
-      }
-      if (existing.status === 'PROCESSED') {
-        return { started: false, record: existing, idempotent: true };
-      }
-      if (existing.status === 'PROCESSING' && !this.isProcessingStale(existing.updated_at)) {
-        return { started: false, record: existing, idempotent: true };
+      const claimed = await this.claimExisting(
+        envelope.tenant_id,
+        envelope.event_id,
+        consumerName,
+        tx,
+      );
+      if (claimed) {
+        return { started: true, record: claimed };
       }
 
-      const row = await this.updateStatus(envelope.tenant_id, envelope.event_id, consumerName, 'PROCESSING', tx);
-      return { started: true, record: row };
+      const existing = await this.find(envelope.event_id, consumerName, tx);
+      if (!existing) {
+        throw new Error(
+          `Inbox record not found after conflict for ${envelope.event_id}/${consumerName}`,
+        );
+      }
+      return { started: false, record: existing, idempotent: true };
     });
     return result;
   }
@@ -73,8 +77,19 @@ export class DomainInboxService {
     await this.setFinalStatus(tenantId, eventId, consumerName, 'PROCESSED');
   }
 
-  async markFailed(tenantId: string, eventId: string, consumerName: string, error: Error): Promise<void> {
-    await this.setFinalStatus(tenantId, eventId, consumerName, 'FAILED', error.message.slice(0, 2000));
+  async markFailed(
+    tenantId: string,
+    eventId: string,
+    consumerName: string,
+    error: Error,
+  ): Promise<void> {
+    await this.setFinalStatus(
+      tenantId,
+      eventId,
+      consumerName,
+      'FAILED',
+      error.message.slice(0, 2000),
+    );
   }
 
   private async setFinalStatus(
@@ -113,12 +128,16 @@ export class DomainInboxService {
     `;
   }
 
-  private async find(eventId: string, consumerName: string, db = this.prisma.db): Promise<DomainInboxRecord | undefined> {
-    const rows = await db.$queryRaw`
+  private async find(
+    eventId: string,
+    consumerName: string,
+    db = this.prisma.db,
+  ): Promise<DomainInboxRecord | undefined> {
+    const rows = (await db.$queryRaw`
       SELECT * FROM "domain_inbox_events"
       WHERE "eventId" = ${eventId} AND "consumerName" = ${consumerName}
       LIMIT 1
-    ` as any[];
+    `) as any[];
     const [row] = rows;
     return row ? this.fromRow(row) : undefined;
   }
@@ -128,32 +147,37 @@ export class DomainInboxService {
     consumerName: string,
     db = this.prisma.db,
   ): Promise<DomainInboxRecord | undefined> {
-    const rows = await db.$queryRaw`
+    const rows = (await db.$queryRaw`
       INSERT INTO "domain_inbox_events" ("eventId", "consumerName", "tenantId", "status", "updatedAt")
       VALUES (${envelope.event_id}, ${consumerName}, ${envelope.tenant_id}, 'PROCESSING', now())
       ON CONFLICT ("eventId", "consumerName") DO NOTHING
       RETURNING *
-    ` as any[];
+    `) as any[];
     const [row] = rows;
     return row ? this.fromRow(row) : undefined;
   }
 
-  private async updateStatus(
+  private async claimExisting(
     tenantId: string,
     eventId: string,
     consumerName: string,
-    status: DomainInboxStatus,
     db = this.prisma.db,
-  ): Promise<DomainInboxRecord> {
+  ): Promise<DomainInboxRecord | undefined> {
     await this.enterTenant(tenantId, db);
-    const rows = await db.$queryRaw`
+    const staleBefore = new Date(Date.now() - this.processingLeaseMs());
+    const rows = (await db.$queryRaw`
       UPDATE "domain_inbox_events"
-      SET "status" = ${status}, "lastError" = NULL, "updatedAt" = now()
-      WHERE "eventId" = ${eventId} AND "consumerName" = ${consumerName}
+      SET "status" = 'PROCESSING', "lastError" = NULL, "updatedAt" = now()
+      WHERE "eventId" = ${eventId}
+        AND "consumerName" = ${consumerName}
+        AND (
+          "status" = 'FAILED'
+          OR ("status" = 'PROCESSING' AND "updatedAt" <= ${staleBefore})
+        )
       RETURNING *
-    ` as any[];
+    `) as any[];
     const [row] = rows;
-    return this.fromRow(row);
+    return row ? this.fromRow(row) : undefined;
   }
 
   private async enterTenant(tenantId: string, db = this.prisma.db): Promise<void> {
@@ -170,8 +194,11 @@ export class DomainInboxService {
   }
 
   private isProcessingStale(updatedAt: Date): boolean {
-    const leaseMs = Number(process.env.FENGINE_INBOX_PROCESSING_LEASE_MS || 300000);
-    return updatedAt.getTime() <= Date.now() - leaseMs;
+    return updatedAt.getTime() <= Date.now() - this.processingLeaseMs();
+  }
+
+  private processingLeaseMs(): number {
+    return Number(process.env.FENGINE_INBOX_PROCESSING_LEASE_MS || 300000);
   }
 
   private fromRow(row: any): DomainInboxRecord {
