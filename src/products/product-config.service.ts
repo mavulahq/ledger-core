@@ -1,10 +1,10 @@
 /*
  * getfluxo.io - Product Configuration & Auto-Creation Engine
  * Copyright (c) 2025 getfluxo.io
- * 
+ *
  * Author: EstandarMustaq <estandarmustaq@getfluxo.io>
  * License: Proprietary - See LICENSE file
- * 
+ *
  * Auto-configurable financial products (CHECKING, SAVINGS, LOAN, CREDIT_LINE)
  * with schema-driven no-code customization
  */
@@ -13,46 +13,49 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../services/prisma.service';
 import { FengineStoreService } from '../services/fengine-store.service';
 import { AuditTrailService } from '../services/audit-trail.service';
+import { DomainEventFactory } from '../domain-events/domain-event-factory.service';
+import { DomainOutboxService } from '../domain-events/domain-outbox.service';
 
 // Product types supported by getfluxo
 export enum ProductType {
-  CHECKING = 'CHECKING',      // Conta corrente (transferências, débitos)
-  SAVINGS = 'SAVINGS',        // Conta poupança (juros, limites levantamento)
-  LOAN = 'LOAN',              // Crédito com parcelas fixas
-  CREDIT_LINE = 'CREDIT_LINE' // Linha de crédito rotatória
+  CHECKING = 'CHECKING', // Conta corrente (transferências, débitos)
+  SAVINGS = 'SAVINGS', // Conta poupança (juros, limites levantamento)
+  LOAN = 'LOAN', // Crédito com parcelas fixas
+  CREDIT_LINE = 'CREDIT_LINE', // Linha de crédito rotatória
 }
 
 // Auto-generated product configuration schema
 export interface ProductSchema {
   product_id: string;
+  version: number;
   tenant_id: string;
   name: string;
   type: ProductType;
-  
+
   // Account-level settings (CHECKING/SAVINGS)
-  minimum_balance?: number;        // Saldo mínimo exigido
-  maximum_balance?: number;        // Limite de saldo
-  overdraft_allowed?: boolean;     // Permite saldo negativo (cheque especial)
-  overdraft_limit?: number;        // Limite de overdraft
-  monthly_fee?: number;            // Taxa mensal
-  interest_rate?: number;          // Taxa de juros (% ao mês)
-  
+  minimum_balance?: number; // Saldo mínimo exigido
+  maximum_balance?: number; // Limite de saldo
+  overdraft_allowed?: boolean; // Permite saldo negativo (cheque especial)
+  overdraft_limit?: number; // Limite de overdraft
+  monthly_fee?: number; // Taxa mensal
+  interest_rate?: number; // Taxa de juros (% ao mês)
+
   // Loan-level settings (LOAN)
-  min_principal?: number;          // Montante mínimo
-  max_principal?: number;          // Montante máximo
-  min_term_months?: number;        // Mínimo de parcelas
-  max_term_months?: number;        // Máximo de parcelas
-  default_interest_rate?: number;  // Taxa padrão (% ao mês)
-  origination_fee?: number;        // Taxa de originação (%)
-  late_payment_fee?: number;       // Taxa de atraso
-  
+  min_principal?: number; // Montante mínimo
+  max_principal?: number; // Montante máximo
+  min_term_months?: number; // Mínimo de parcelas
+  max_term_months?: number; // Máximo de parcelas
+  default_interest_rate?: number; // Taxa padrão (% ao mês)
+  origination_fee?: number; // Taxa de originação (%)
+  late_payment_fee?: number; // Taxa de atraso
+
   // Credit Line settings (CREDIT_LINE)
-  credit_limit?: number;           // Limite de crédito
-  utilization_fee?: number;        // Taxa de utilização
-  min_payment_percent?: number;    // Percentual mínimo de pagamento
-  
+  credit_limit?: number; // Limite de crédito
+  utilization_fee?: number; // Taxa de utilização
+  min_payment_percent?: number; // Percentual mínimo de pagamento
+
   // General settings
-  enabled: boolean;                // Produto ativo
+  enabled: boolean; // Produto ativo
   created_at: Date;
   updated_at: Date;
 }
@@ -71,19 +74,19 @@ export interface TenantConfigSchema {
 export interface FeeSchedule {
   id: string;
   product_id: string;
-  fee_type: string;     // 'MONTHLY', 'TRANSACTION', 'ACCOUNT_MAINTENANCE'
-  amount: number;       // Valor fixo ou percentagem
-  applies_to: string;   // Condição (e.g., 'balance < 500')
-  currency: string;     // MZN, USD, ZAR
+  fee_type: string; // 'MONTHLY', 'TRANSACTION', 'ACCOUNT_MAINTENANCE'
+  amount: number; // Valor fixo ou percentagem
+  applies_to: string; // Condição (e.g., 'balance < 500')
+  currency: string; // MZN, USD, ZAR
 }
 
 export interface InterestCalculation {
   id: string;
   product_id: string;
-  method: string;       // 'SIMPLE', 'COMPOUND', 'DAILY_ACCRUAL'
-  frequency: string;    // 'DAILY', 'MONTHLY', 'QUARTERLY'
-  rate_type: string;    // 'FIXED', 'VARIABLE', 'TIERED'
-  tiers?: TierRule[];   // Para rate_type = TIERED
+  method: string; // 'SIMPLE', 'COMPOUND', 'DAILY_ACCRUAL'
+  frequency: string; // 'DAILY', 'MONTHLY', 'QUARTERLY'
+  rate_type: string; // 'FIXED', 'VARIABLE', 'TIERED'
+  tiers?: TierRule[]; // Para rate_type = TIERED
 }
 
 export interface TierRule {
@@ -101,14 +104,14 @@ export interface PaymentWorkflow {
 
 export interface WorkflowStep {
   order: number;
-  action: string;       // 'VALIDATE', 'CHARGE_FEE', 'UPDATE_BALANCE', 'RECORD_LEDGER'
+  action: string; // 'VALIDATE', 'CHARGE_FEE', 'UPDATE_BALANCE', 'RECORD_LEDGER'
   conditions?: string[];
 }
 
 export interface ComplianceRule {
   id: string;
   tenant_id: string;
-  rule_type: string;    // 'MAX_WITHDRAWAL', 'TRANSACTION_LIMIT', 'KYC_REQUIRED'
+  rule_type: string; // 'MAX_WITHDRAWAL', 'TRANSACTION_LIMIT', 'KYC_REQUIRED'
   parameters: Record<string, any>;
 }
 
@@ -118,6 +121,8 @@ export class ProductConfigService {
     private prisma: PrismaService,
     private store: FengineStoreService,
     private auditTrail: AuditTrailService,
+    private domainEvents: DomainEventFactory,
+    private outbox: DomainOutboxService,
   ) {}
 
   /**
@@ -127,18 +132,31 @@ export class ProductConfigService {
   async createOrUpdateProduct(
     tenantId: string,
     productType: ProductType,
-    config: Partial<ProductSchema>
+    config: Partial<ProductSchema>,
   ): Promise<ProductSchema> {
     const productId = config.product_id || `prod_${productType.toLowerCase()}_${Date.now()}`;
-    
+    const existing = await this.store.getProduct(tenantId, productId);
+    const now = new Date();
+
     // Default configurations by product type
     const defaults = this.getDefaultProductConfig(productType);
-    const merged = { ...defaults, ...config, tenant_id: tenantId, product_id: productId };
-    
+    const merged = {
+      ...defaults,
+      ...config,
+      tenant_id: tenantId,
+      product_id: productId,
+      version: existing ? Math.max(1, Number(existing.version || 1)) + 1 : 1,
+      created_at: existing?.created_at || config.created_at || now,
+      updated_at: now,
+    };
+
     // Store in PostgreSQL (tenant schema)
     // In production, would use Prisma to persist to tenant_{id}.products table
     const product = merged as ProductSchema;
     await this.store.saveProduct(tenantId, product);
+    await this.outbox.append(
+      this.domainEvents.productsConfigurationPublished({ tenantId, product }),
+    );
     this.auditTrail.record({
       tenant_id: tenantId,
       action: 'product.upserted',
@@ -155,17 +173,20 @@ export class ProductConfigService {
   /**
    * Auto-generate schema for tenant based on regulatory jurisdiction
    */
-  async generateTenantConfigSchema(tenantId: string, jurisdiction: string): Promise<TenantConfigSchema> {
+  async generateTenantConfigSchema(
+    tenantId: string,
+    jurisdiction: string,
+  ): Promise<TenantConfigSchema> {
     // Default config varies by jurisdiction (SADC, EU, etc.)
     const products: ProductSchema[] = [];
 
     // Auto-create standard products for institution
     const productTypes = [ProductType.CHECKING, ProductType.SAVINGS, ProductType.LOAN];
-    
+
     for (const type of productTypes) {
       const product = await this.createOrUpdateProduct(tenantId, type, {
         enabled: true,
-        name: `${type} Account`
+        name: `${type} Account`,
       });
       products.push(product);
     }
@@ -225,7 +246,7 @@ export class ProductConfigService {
           type: ProductType.SAVINGS,
           name: 'Savings Account',
           minimum_balance: 0,
-          interest_rate: 0.5,  // 0.5% monthly
+          interest_rate: 0.5, // 0.5% monthly
           monthly_fee: 0,
           enabled: true,
         };
@@ -237,8 +258,8 @@ export class ProductConfigService {
           max_principal: 50000,
           min_term_months: 3,
           max_term_months: 60,
-          default_interest_rate: 2.5,  // 2.5% monthly
-          origination_fee: 2,          // 2% upfront
+          default_interest_rate: 2.5, // 2.5% monthly
+          origination_fee: 2, // 2% upfront
           late_payment_fee: 50,
           enabled: true,
         };
@@ -247,8 +268,8 @@ export class ProductConfigService {
           type: ProductType.CREDIT_LINE,
           name: 'Credit Line',
           credit_limit: 10000,
-          utilization_fee: 1.5,    // 1.5% monthly
-          min_payment_percent: 5,   // Pay at least 5% of balance
+          utilization_fee: 1.5, // 1.5% monthly
+          min_payment_percent: 5, // Pay at least 5% of balance
           enabled: true,
         };
       default:
@@ -258,8 +279,8 @@ export class ProductConfigService {
 
   private generateDefaultFeeSchedule(tenantId: string, products: ProductSchema[]): FeeSchedule[] {
     return products
-      .filter(p => p.type === ProductType.CHECKING)
-      .map(p => ({
+      .filter((p) => p.type === ProductType.CHECKING)
+      .map((p) => ({
         id: `fee_${p.product_id}`,
         product_id: p.product_id!,
         fee_type: 'MONTHLY',
@@ -271,8 +292,8 @@ export class ProductConfigService {
 
   private generateDefaultInterestCalculations(products: ProductSchema[]): InterestCalculation[] {
     return products
-      .filter(p => [ProductType.SAVINGS, ProductType.LOAN].includes(p.type))
-      .map(p => ({
+      .filter((p) => [ProductType.SAVINGS, ProductType.LOAN].includes(p.type))
+      .map((p) => ({
         id: `interest_${p.product_id}`,
         product_id: p.product_id!,
         method: p.type === ProductType.SAVINGS ? 'DAILY_ACCRUAL' : 'SIMPLE',
@@ -282,7 +303,7 @@ export class ProductConfigService {
   }
 
   private generateDefaultWorkflows(products: ProductSchema[]): PaymentWorkflow[] {
-    return products.map(p => ({
+    return products.map((p) => ({
       id: `workflow_${p.product_id}`,
       product_id: p.product_id!,
       name: `Standard payment workflow for ${p.name}`,
@@ -309,7 +330,7 @@ export class ProductConfigService {
           id: 'compliance_kyc',
           tenant_id: '',
           rule_type: 'KYC_REQUIRED',
-          parameters: { min_amount: 50000 },   // KYC for amounts > 50K
+          parameters: { min_amount: 50000 }, // KYC for amounts > 50K
         },
       ];
     }
