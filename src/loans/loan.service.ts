@@ -11,7 +11,7 @@
 
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../services/prisma.service';
-import { TransactionService } from '../transactions/transaction.service';
+import { Transaction, TransactionService } from '../transactions/transaction.service';
 import { OODAStage, RulesEngineService } from '../rules-engine/rules-engine.service';
 import { ProductConfigService } from '../products/product-config.service';
 import { AuditTrailService } from '../services/audit-trail.service';
@@ -145,10 +145,14 @@ export class LoanService {
         throw new Error(`Requested amount above product maximum of ${product.max_principal}`);
       }
       if (product.min_term_months && application.requested_term_months < product.min_term_months) {
-        throw new Error(`Requested term below product minimum of ${product.min_term_months} months`);
+        throw new Error(
+          `Requested term below product minimum of ${product.min_term_months} months`,
+        );
       }
       if (product.max_term_months && application.requested_term_months > product.max_term_months) {
-        throw new Error(`Requested term above product maximum of ${product.max_term_months} months`);
+        throw new Error(
+          `Requested term above product maximum of ${product.max_term_months} months`,
+        );
       }
     }
 
@@ -240,11 +244,15 @@ export class LoanService {
       const tierRate = tierRule?.actions.find((action) => action.action === 'tiers')?.value;
       const baseRatePercent = product?.default_interest_rate || 2.5;
       const tieredRatePercent = Array.isArray(tierRate)
-        ? tierRate.find((tier: any) => loan.principal_amount >= tier.min && loan.principal_amount <= tier.max)?.rate
+        ? tierRate.find(
+            (tier: any) => loan.principal_amount >= tier.min && loan.principal_amount <= tier.max,
+          )?.rate
         : undefined;
       const monthlyRate = (tieredRatePercent || baseRatePercent) / 100;
       const graceRule = ruleResults.find((result) => result.rule_type === 'GRACE_PERIOD');
-      const graceMonths = Number(graceRule?.actions.find((action) => action.action === 'grace_months')?.value || 0);
+      const graceMonths = Number(
+        graceRule?.actions.find((action) => action.action === 'grace_months')?.value || 0,
+      );
 
       const monthlyPayment = calculatePMT(loan.principal_amount, monthlyRate, loan.term_months);
 
@@ -286,7 +294,9 @@ export class LoanService {
         entity_id: loan.id,
         phase: 'DECIDE',
         metadata: {
-          failed_rules: ruleResults.filter((result) => !result.passed).map((result) => result.rule_type),
+          failed_rules: ruleResults
+            .filter((result) => !result.passed)
+            .map((result) => result.rule_type),
         },
       });
       console.log(`✗ Loan rejected: ${loan.id} (Failed rules: ${failed})`);
@@ -324,7 +334,18 @@ export class LoanService {
       const settlement = replay?.metadata?.settlement_result;
       if (settlement?.posting_status === 'SUCCESS') {
         const persistedLoan = (await this.store.getLoan(tenantId, loan.id)) || loan;
-        await this.ensureLoanDisbursedOutbox(tenantId, persistedLoan, settlement.transaction_id || replay.id, idempotencyKey);
+        const disbursedLoan = await this.ensureLoanDisbursedState(
+          tenantId,
+          persistedLoan,
+          this.positiveAmount(replay.amount, persistedLoan.principal_amount),
+        );
+        await this.ensureLoanDisbursedOutbox(
+          tenantId,
+          disbursedLoan,
+          settlement.transaction_id || replay.id,
+          idempotencyKey,
+          this.replayAggregateVersion(replay, 'lending.loan_disbursed') || disbursedLoan.version,
+        );
         return {
           success: true,
           disbursement_id: replay.id,
@@ -348,8 +369,20 @@ export class LoanService {
 
     if (result.posting_status === 'SUCCESS') {
       if (result.idempotent) {
+        const replay = await this.store.getTransactionByIdempotencyKey(tenantId, idempotencyKey);
         const persistedLoan = (await this.store.getLoan(tenantId, loan.id)) || loan;
-        await this.ensureLoanDisbursedOutbox(tenantId, persistedLoan, result.transaction_id, idempotencyKey);
+        const disbursedLoan = await this.ensureLoanDisbursedState(
+          tenantId,
+          persistedLoan,
+          this.positiveAmount(replay?.amount, persistedLoan.principal_amount),
+        );
+        await this.ensureLoanDisbursedOutbox(
+          tenantId,
+          disbursedLoan,
+          result.transaction_id,
+          idempotencyKey,
+          this.replayAggregateVersion(replay, 'lending.loan_disbursed') || disbursedLoan.version,
+        );
         return {
           success: true,
           disbursement_id: result.transaction_id,
@@ -365,7 +398,19 @@ export class LoanService {
       loan.maturity_date.setMonth(loan.maturity_date.getMonth() + loan.term_months);
       this.bumpLoanVersion(loan);
       await this.store.saveLoan(tenantId, loan);
-      await this.ensureLoanDisbursedOutbox(tenantId, loan, result.transaction_id, idempotencyKey);
+      await this.recordDomainEventVersion(
+        tenantId,
+        idempotencyKey,
+        'lending.loan_disbursed',
+        loan.version,
+      );
+      await this.ensureLoanDisbursedOutbox(
+        tenantId,
+        loan,
+        result.transaction_id,
+        idempotencyKey,
+        loan.version,
+      );
       this.auditTrail.record({
         tenant_id: tenantId,
         action: 'loan.disbursed',
@@ -434,6 +479,7 @@ export class LoanService {
         Number(replay.amount),
         settlement.allocation,
         idempotencyKey,
+        this.replayAggregateVersion(replay, 'lending.payment_posted') || persistedLoan.version,
       );
       return {
         success: true,
@@ -451,7 +497,8 @@ export class LoanService {
     // Calculate interest due
     const schedule = this.generateAmortizationSchedule(loan);
     const nextInstallment =
-      schedule.find((item) => item.closing_balance < loan.remaining_balance + 0.0001) || schedule[0];
+      schedule.find((item) => item.closing_balance < loan.remaining_balance + 0.0001) ||
+      schedule[0];
     const interestDue = nextInstallment?.interest || loan.remaining_balance * loan.monthly_rate;
     const principalDue = nextInstallment?.principal || Math.max(paymentAmount - interestDue, 0);
     const feeDue = loan.total_paid_fees === 0 ? loan.origination_fee_amount : 0;
@@ -473,14 +520,16 @@ export class LoanService {
 
     if (result.posting_status === 'SUCCESS') {
       if (result.idempotent && result.allocation) {
+        const replay = await this.store.getTransactionByIdempotencyKey(tenantId, idempotencyKey);
         const persistedLoan = (await this.store.getLoan(tenantId, loan.id)) || loan;
         await this.ensurePaymentPostedOutbox(
           tenantId,
           persistedLoan,
           result.transaction_id,
-          paymentAmount,
+          this.positiveAmount(replay?.amount, paymentAmount),
           result.allocation,
           idempotencyKey,
+          this.replayAggregateVersion(replay, 'lending.payment_posted') || persistedLoan.version,
         );
         return {
           success: true,
@@ -511,7 +560,21 @@ export class LoanService {
       }
       this.bumpLoanVersion(loan);
       await this.store.saveLoan(tenantId, loan);
-      await this.ensurePaymentPostedOutbox(tenantId, loan, result.transaction_id, paymentAmount, allocation, idempotencyKey);
+      await this.recordDomainEventVersion(
+        tenantId,
+        idempotencyKey,
+        'lending.payment_posted',
+        loan.version,
+      );
+      await this.ensurePaymentPostedOutbox(
+        tenantId,
+        loan,
+        result.transaction_id,
+        paymentAmount,
+        allocation,
+        idempotencyKey,
+        loan.version,
+      );
       this.auditTrail.record({
         tenant_id: tenantId,
         action: 'loan.payment.recorded',
@@ -550,11 +613,70 @@ export class LoanService {
     loan.updated_at = new Date();
   }
 
+  private async ensureLoanDisbursedState(
+    tenantId: string,
+    loan: Loan,
+    disbursedAmount?: number,
+  ): Promise<Loan> {
+    if (loan.status === LoanStatus.ACTIVE && loan.disbursed_amount > 0) {
+      return loan;
+    }
+
+    const amount = this.positiveAmount(disbursedAmount, loan.principal_amount);
+    loan.status = LoanStatus.ACTIVE;
+    loan.disbursement_date = loan.disbursement_date || new Date();
+    loan.disbursed_amount = amount;
+    loan.remaining_balance = amount;
+    if (!loan.maturity_date) {
+      loan.maturity_date = new Date();
+      loan.maturity_date.setMonth(loan.maturity_date.getMonth() + loan.term_months);
+    }
+    this.bumpLoanVersion(loan);
+    await this.store.saveLoan(tenantId, loan);
+    return loan;
+  }
+
+  private async recordDomainEventVersion(
+    tenantId: string,
+    idempotencyKey: string,
+    eventType: 'lending.loan_disbursed' | 'lending.payment_posted',
+    aggregateVersion: number,
+  ): Promise<void> {
+    const transaction = await this.store.getTransactionByIdempotencyKey(tenantId, idempotencyKey);
+    if (!transaction) {
+      return;
+    }
+
+    transaction.metadata = {
+      ...transaction.metadata,
+      domain_event_versions: {
+        ...(transaction.metadata?.domain_event_versions || {}),
+        [eventType]: aggregateVersion,
+      },
+    };
+    await this.store.saveTransaction(tenantId, transaction);
+  }
+
+  private replayAggregateVersion(
+    transaction: Transaction | undefined,
+    eventType: string,
+  ): number | undefined {
+    const version = transaction?.metadata?.domain_event_versions?.[eventType];
+    const numeric = Number(version);
+    return Number.isInteger(numeric) && numeric > 0 ? numeric : undefined;
+  }
+
+  private positiveAmount(value: unknown, fallback: number): number {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
   private async ensureLoanDisbursedOutbox(
     tenantId: string,
     loan: Loan,
     transactionId: string,
     idempotencyKey: string,
+    aggregateVersion?: number,
   ): Promise<void> {
     await this.outbox.append(
       this.domainEvents.loanDisbursed({
@@ -563,6 +685,7 @@ export class LoanService {
         transactionId,
         currency: 'MZN',
         idempotencyKey,
+        aggregateVersion,
       }),
     );
   }
@@ -579,6 +702,7 @@ export class LoanService {
       balance_after: number;
     },
     idempotencyKey: string,
+    aggregateVersion?: number,
   ): Promise<void> {
     await this.outbox.append(
       this.domainEvents.lendingPaymentPosted({
@@ -590,6 +714,7 @@ export class LoanService {
         currency: 'MZN',
         allocation,
         idempotencyKey,
+        aggregateVersion,
       }),
     );
   }
@@ -597,7 +722,12 @@ export class LoanService {
   /**
    * Generate comparison scenarios (for customer to choose terms)
    */
-  generateLoanScenarios(principal: number, minRate: number, maxRate: number, months: number): Array<any> {
+  generateLoanScenarios(
+    principal: number,
+    minRate: number,
+    maxRate: number,
+    months: number,
+  ): Array<any> {
     const minMonthlyRate = getMonthlyRateFromAPR(minRate);
     const maxMonthlyRate = getMonthlyRateFromAPR(maxRate);
 

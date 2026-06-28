@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { hostname } from 'os';
 import { PrismaService } from '../services/prisma.service';
 import {
   DomainEventEnvelope,
@@ -10,16 +12,22 @@ import {
 @Injectable()
 export class DomainOutboxService {
   private readonly memory = new Map<string, DomainOutboxRecord>();
-  private readonly workerId = `fengine-outbox-${process.pid}`;
+  private readonly workerId = `fengine-outbox-${hostname()}-${process.pid}-${randomUUID()}`;
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async append(envelope: DomainEventEnvelope, options: { maxAttempts?: number } = {}): Promise<DomainOutboxRecord> {
+  async append(
+    envelope: DomainEventEnvelope,
+    options: { maxAttempts?: number } = {},
+  ): Promise<DomainOutboxRecord> {
     assertDomainEventEnvelope(envelope);
     const maxAttempts = Number(options.maxAttempts || process.env.FENGINE_OUTBOX_MAX_ATTEMPTS || 3);
 
     if (!this.prisma.isConfigured) {
-      const existing = this.findMemoryByIdempotencyKey(envelope.tenant_id, envelope.idempotency_key);
+      const existing = this.findMemoryByIdempotencyKey(
+        envelope.tenant_id,
+        envelope.idempotency_key,
+      );
       if (existing) {
         return existing;
       }
@@ -61,7 +69,9 @@ export class DomainOutboxService {
 
   async list(tenantId?: string): Promise<DomainOutboxRecord[]> {
     if (!this.prisma.isConfigured) {
-      return [...this.memory.values()].filter((record) => !tenantId || record.envelope.tenant_id === tenantId);
+      return [...this.memory.values()].filter(
+        (record) => !tenantId || record.envelope.tenant_id === tenantId,
+      );
     }
 
     if (tenantId) {
@@ -204,7 +214,9 @@ export class DomainOutboxService {
     }
 
     await this.enterSystemContext();
-    const rows = await this.prisma.db.$queryRaw<Array<{ status: DomainOutboxStatus; count: bigint }>>`
+    const rows = await this.prisma.db.$queryRaw<
+      Array<{ status: DomainOutboxStatus; count: bigint }>
+    >`
       SELECT "status", COUNT(*) AS count
       FROM "domain_outbox_events"
       GROUP BY "status"
@@ -215,12 +227,17 @@ export class DomainOutboxService {
     }, empty);
   }
 
-  private findMemoryByIdempotencyKey(tenantId: string, idempotencyKey?: string): DomainOutboxRecord | undefined {
+  private findMemoryByIdempotencyKey(
+    tenantId: string,
+    idempotencyKey?: string,
+  ): DomainOutboxRecord | undefined {
     if (!idempotencyKey) {
       return undefined;
     }
     return [...this.memory.values()].find(
-      (record) => record.envelope.tenant_id === tenantId && record.envelope.idempotency_key === idempotencyKey,
+      (record) =>
+        record.envelope.tenant_id === tenantId &&
+        record.envelope.idempotency_key === idempotencyKey,
     );
   }
 
@@ -228,7 +245,11 @@ export class DomainOutboxService {
     if (record.status === 'PENDING') {
       return record.available_at.getTime() <= now.getTime();
     }
-    return record.status === 'PUBLISHING' && !!record.locked_until && record.locked_until.getTime() <= now.getTime();
+    return (
+      record.status === 'PUBLISHING' &&
+      !!record.locked_until &&
+      record.locked_until.getTime() <= now.getTime()
+    );
   }
 
   private leaseMs(): number {
