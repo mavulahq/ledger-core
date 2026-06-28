@@ -4,6 +4,7 @@ import { DomainInboxService } from '../../src/domain-events/domain-inbox.service
 import { DomainOutboxPublisherService } from '../../src/domain-events/domain-outbox-publisher.service';
 import { DomainOutboxService } from '../../src/domain-events/domain-outbox.service';
 import { Loan, LoanStatus, LoanType } from '../../src/loans/loan.service';
+import { ProductSchema, ProductType } from '../../src/products/product-config.service';
 import { EngineEventService } from '../../src/worker/engine-event.service';
 import { WorkerQueueService } from '../../src/worker/worker-queue.service';
 
@@ -64,9 +65,14 @@ describe('fengine worker communication', () => {
       },
       idempotencyKey: 'idem_payment_loan_001',
     });
+    const productEvent = factory.productsConfigurationPublished({
+      tenantId: 'tenant_001',
+      product: productConfiguration(),
+    });
 
     await outbox.append(disbursementEvent);
     await outbox.append(paymentEvent);
+    await outbox.append(productEvent);
     await expect(publisher.publishPending(1)).resolves.toMatchObject({
       claimed: 1,
       published: 1,
@@ -86,7 +92,7 @@ describe('fengine worker communication', () => {
       event_id: disbursementEvent.event_id,
       event_type: 'lending.loan_disbursed',
     });
-    await expect(publisher.publishPending(10)).resolves.toMatchObject({
+    await expect(publisher.publishPending(1)).resolves.toMatchObject({
       claimed: 1,
       published: 1,
       failed: 0,
@@ -103,7 +109,25 @@ describe('fengine worker communication', () => {
       allocation: { principal: '1375.00', interest: '625.00', fees: '500.00' },
       balance_after: '23625.00',
     });
+    await expect(publisher.publishPending(1)).resolves.toMatchObject({
+      claimed: 1,
+      published: 1,
+      failed: 0,
+    });
+    const productQueued = await queue.get(`fengine-${productEvent.event_id}`);
+    expect(productQueued).toMatchObject({
+      payload: {
+        domain_event: true,
+        event_type: 'products.configuration_published',
+      },
+    });
+    expect(productQueued?.payload.event.payload).toMatchObject({
+      product_id: 'prod_loan_001',
+      product_type: ProductType.LOAN,
+      configuration_version: 2,
+    });
     await expect(outbox.list('tenant_001')).resolves.toEqual([
+      expect.objectContaining({ status: 'PUBLISHED' }),
       expect.objectContaining({ status: 'PUBLISHED' }),
       expect.objectContaining({ status: 'PUBLISHED' }),
     ]);
@@ -279,5 +303,25 @@ function approvedLoan(): Loan {
     remaining_balance: 25000,
     created_at: new Date(),
     updated_at: new Date(),
+  };
+}
+
+function productConfiguration(): ProductSchema {
+  return {
+    product_id: 'prod_loan_001',
+    version: 2,
+    tenant_id: 'tenant_001',
+    name: 'Personal Loan',
+    type: ProductType.LOAN,
+    min_principal: 1000,
+    max_principal: 50000,
+    min_term_months: 3,
+    max_term_months: 60,
+    default_interest_rate: 2.5,
+    origination_fee: 2,
+    late_payment_fee: 50,
+    enabled: true,
+    created_at: new Date('2026-01-01T00:00:00.000Z'),
+    updated_at: new Date('2026-01-02T00:00:00.000Z'),
   };
 }

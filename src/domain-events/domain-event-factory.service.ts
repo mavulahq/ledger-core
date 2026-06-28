@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { Loan } from '../loans/loan.service';
+import type { ProductSchema } from '../products/product-config.service';
 import {
   DomainEventEnvelope,
   LendingPaymentPostedPayload,
   LoanDisbursedPayload,
+  ProductsConfigurationPublishedPayload,
 } from './domain-event.types';
 
 @Injectable()
@@ -112,6 +114,47 @@ export class DomainEventFactory {
     };
   }
 
+  productsConfigurationPublished(input: {
+    tenantId: string;
+    product: ProductSchema;
+    idempotencyKey?: string;
+    occurredAt?: Date;
+  }): DomainEventEnvelope<ProductsConfigurationPublishedPayload> {
+    const occurredAt = input.occurredAt || new Date();
+    const eventId = `evt_${randomUUID()}`;
+    const idempotencyKey =
+      input.idempotencyKey ||
+      `${input.tenantId}:${input.product.product_id}:configuration:${input.product.version}`;
+
+    return {
+      event_id: eventId,
+      event_type: 'products.configuration_published',
+      event_version: 1,
+      occurred_at: occurredAt.toISOString(),
+      tenant_id: input.tenantId,
+      aggregate: {
+        type: 'product_configuration',
+        id: input.product.product_id,
+        version: this.productAggregateVersion(input.product),
+      },
+      correlation_id: `corr_${input.product.product_id}_${input.product.version}`,
+      causation_id: idempotencyKey,
+      idempotency_key: idempotencyKey,
+      payload: {
+        product_id: input.product.product_id,
+        product_type: input.product.type,
+        name: input.product.name,
+        enabled: input.product.enabled,
+        configuration_version: this.productAggregateVersion(input.product),
+      },
+      metadata: {
+        producer: 'fengine',
+        data_classification: 'internal',
+        schema_uri: 'contracts/domain-events/event-envelope.schema.json',
+      },
+    };
+  }
+
   private aggregateVersion(loan: Loan, override?: number): number {
     if (Number.isInteger(override) && override > 0) {
       return override;
@@ -121,6 +164,16 @@ export class DomainEventFactory {
     }
     if (loan.updated_at instanceof Date) {
       return Math.max(1, loan.updated_at.getTime());
+    }
+    return 1;
+  }
+
+  private productAggregateVersion(product: ProductSchema): number {
+    if (Number.isInteger(product.version) && product.version > 0) {
+      return product.version;
+    }
+    if (product.updated_at instanceof Date) {
+      return Math.max(1, product.updated_at.getTime());
     }
     return 1;
   }

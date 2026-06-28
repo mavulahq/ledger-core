@@ -95,6 +95,54 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     console.log(`  Term: ${loan.term_months} months`);
   });
 
+  it('publishes product configuration events idempotently by product version', async () => {
+    const productId = `prod_event_${Date.now()}`;
+    const initial = await productConfigService.createOrUpdateProduct(tenantId, ProductType.LOAN, {
+      product_id: productId,
+      name: 'Evented Loan',
+      enabled: true,
+    });
+    const updated = await productConfigService.createOrUpdateProduct(tenantId, ProductType.LOAN, {
+      product_id: productId,
+      name: 'Evented Loan v2',
+      enabled: false,
+    });
+    const events = (await outboxService.list(tenantId)).filter(
+      (event) =>
+        event.envelope.event_type === 'products.configuration_published' &&
+        event.envelope.aggregate.id === productId,
+    );
+
+    expect(initial.version).toBe(1);
+    expect(updated.version).toBe(2);
+    expect(events).toHaveLength(2);
+    expect(events[0].envelope).toMatchObject({
+      event_type: 'products.configuration_published',
+      tenant_id: tenantId,
+      aggregate: { type: 'product_configuration', id: productId, version: 1 },
+      payload: {
+        product_id: productId,
+        product_type: ProductType.LOAN,
+        name: 'Evented Loan',
+        enabled: true,
+        configuration_version: 1,
+      },
+      metadata: {
+        producer: 'fengine',
+        data_classification: 'internal',
+      },
+    });
+    expect(events[1].envelope).toMatchObject({
+      aggregate: { type: 'product_configuration', id: productId, version: 2 },
+      payload: {
+        product_id: productId,
+        name: 'Evented Loan v2',
+        enabled: false,
+        configuration_version: 2,
+      },
+    });
+  });
+
   it('[ORIENT] Rules Engine evaluates eligibility', async () => {
     // ORIENT: Apply business rules and decision logic
     console.log('\n=== PHASE 2: ORIENT ===');

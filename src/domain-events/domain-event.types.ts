@@ -80,11 +80,23 @@ export interface LendingPaymentPostedPayload {
   balance_after: string;
 }
 
+export interface ProductsConfigurationPublishedPayload {
+  product_id: string;
+  product_type: string;
+  name: string;
+  enabled: boolean;
+  configuration_version: number;
+}
+
 export function assertDomainEventEnvelope(value: any): asserts value is DomainEventEnvelope {
   if (!value || typeof value !== 'object') {
     throw new Error('domain event envelope must be an object');
   }
-  if (!/^evt_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.event_id || '')) {
+  if (
+    !/^evt_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      value.event_id || '',
+    )
+  ) {
     throw new Error('domain event event_id must use evt_<uuid>');
   }
   if (!/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/.test(value.event_type || '')) {
@@ -93,13 +105,21 @@ export function assertDomainEventEnvelope(value: any): asserts value is DomainEv
   if (!Number.isInteger(value.event_version) || value.event_version < 1) {
     throw new Error('domain event event_version must be a positive integer');
   }
-  if (!value.occurred_at || Number.isNaN(Date.parse(value.occurred_at)) || !String(value.occurred_at).endsWith('Z')) {
+  if (
+    !value.occurred_at ||
+    Number.isNaN(Date.parse(value.occurred_at)) ||
+    !String(value.occurred_at).endsWith('Z')
+  ) {
     throw new Error('domain event occurred_at must be UTC');
   }
   if (!value.tenant_id) {
     throw new Error('domain event tenant_id is required');
   }
-  if (!value.aggregate?.type || !value.aggregate?.id || !Number.isInteger(value.aggregate?.version)) {
+  if (
+    !value.aggregate?.type ||
+    !value.aggregate?.id ||
+    !Number.isInteger(value.aggregate?.version)
+  ) {
     throw new Error('domain event aggregate must include type, id, and version');
   }
   if (!value.correlation_id || !value.causation_id) {
