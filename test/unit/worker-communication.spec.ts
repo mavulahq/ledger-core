@@ -3,6 +3,7 @@ import { DomainEventFactory } from '../../src/domain-events/domain-event-factory
 import { DomainInboxService } from '../../src/domain-events/domain-inbox.service';
 import { DomainOutboxPublisherService } from '../../src/domain-events/domain-outbox-publisher.service';
 import { DomainOutboxService } from '../../src/domain-events/domain-outbox.service';
+import { JournalEntry } from '../../src/ledger/ledger.service';
 import { Loan, LoanStatus, LoanType } from '../../src/loans/loan.service';
 import { ProductSchema, ProductType } from '../../src/products/product-config.service';
 import { EngineEventService } from '../../src/worker/engine-event.service';
@@ -69,10 +70,19 @@ describe('fengine worker communication', () => {
       tenantId: 'tenant_001',
       product: productConfiguration(),
     });
+    const journalEvent = factory.ledgerJournalPosted({
+      tenantId: 'tenant_001',
+      entry: journalEntry(),
+      lines: [
+        { account_code: '10010', currency: 'MZN', debit: '2500.00', credit: '0.00' },
+        { account_code: '11100', currency: 'MZN', debit: '0.00', credit: '2500.00' },
+      ],
+    });
 
     await outbox.append(disbursementEvent);
     await outbox.append(paymentEvent);
     await outbox.append(productEvent);
+    await outbox.append(journalEvent);
     await expect(publisher.publishPending(1)).resolves.toMatchObject({
       claimed: 1,
       published: 1,
@@ -126,7 +136,25 @@ describe('fengine worker communication', () => {
       product_type: ProductType.LOAN,
       configuration_version: 2,
     });
+    await expect(publisher.publishPending(1)).resolves.toMatchObject({
+      claimed: 1,
+      published: 1,
+      failed: 0,
+    });
+    const journalQueued = await queue.get(`fengine-${journalEvent.event_id}`);
+    expect(journalQueued).toMatchObject({
+      payload: {
+        domain_event: true,
+        event_type: 'ledger.journal_posted',
+      },
+    });
+    expect(journalQueued?.payload.event.payload).toMatchObject({
+      journal_entry_id: 'je_txn_001',
+      transaction_id: 'txn_001',
+      totals: [{ currency: 'MZN', debit: '2500.00', credit: '2500.00' }],
+    });
     await expect(outbox.list('tenant_001')).resolves.toEqual([
+      expect.objectContaining({ status: 'PUBLISHED' }),
       expect.objectContaining({ status: 'PUBLISHED' }),
       expect.objectContaining({ status: 'PUBLISHED' }),
       expect.objectContaining({ status: 'PUBLISHED' }),
@@ -323,5 +351,22 @@ function productConfiguration(): ProductSchema {
     enabled: true,
     created_at: new Date('2026-01-01T00:00:00.000Z'),
     updated_at: new Date('2026-01-02T00:00:00.000Z'),
+  };
+}
+
+function journalEntry(): JournalEntry {
+  return {
+    entry_id: 'je_txn_001',
+    entry_date: new Date('2026-06-29T10:00:00.000Z'),
+    transaction_id: 'txn_001',
+    description: 'Journal entry fixture',
+    posted_by: 'SYSTEM',
+    posting_date: new Date('2026-06-29T10:00:00.000Z'),
+    entries: [
+      { account_code: '10010', debit_amount: 2500 },
+      { account_code: '11100', credit_amount: 2500 },
+    ],
+    status: 'POSTED',
+    metadata: {},
   };
 }

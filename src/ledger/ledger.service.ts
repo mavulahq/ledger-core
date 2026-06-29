@@ -13,6 +13,12 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../services/prisma.service';
 import { FengineStoreService } from '../services/fengine-store.service';
 import { AuditTrailService } from '../services/audit-trail.service';
+import { DomainEventFactory } from '../domain-events/domain-event-factory.service';
+import { DomainOutboxService } from '../domain-events/domain-outbox.service';
+import {
+  DomainEventEnvelope,
+  LedgerJournalPostedPayload,
+} from '../domain-events/domain-event.types';
 
 // Chart of Accounts - International standard structure
 export enum AccountClass {
@@ -93,6 +99,8 @@ export class LedgerService {
     private prisma: PrismaService,
     private store: FengineStoreService,
     private auditTrail: AuditTrailService,
+    private domainEvents: DomainEventFactory,
+    private outbox: DomainOutboxService,
   ) {}
 
   /**
@@ -237,7 +245,6 @@ export class LedgerService {
    * Rule: Debits must equal Credits
    */
   async postJournalEntry(tenantId: string, entry: JournalEntry): Promise<JournalEntry> {
-    // Validate balanced entry
     const totalDebits = (entry.entries || [])
       .reduce((sum, line) => sum + (line.debit_amount || 0), 0);
     const totalCredits = (entry.entries || [])
@@ -247,19 +254,24 @@ export class LedgerService {
       throw new Error(`Journal entry not balanced: Debits ${totalDebits} ≠ Credits ${totalCredits}`);
     }
 
-    // Update account balances
-    for (const line of entry.entries || []) {
-      if (line.debit_amount) {
-        await this.updateAccountBalance(tenantId, line.account_code, line.debit_amount, 'DEBIT');
-      }
-      if (line.credit_amount) {
-        await this.updateAccountBalance(tenantId, line.account_code, line.credit_amount, 'CREDIT');
-      }
+    const existing = await this.findPostedJournalEntry(tenantId, entry.entry_id);
+    if (existing) {
+      await this.ensureJournalPostedOutbox(tenantId, existing);
+      return existing;
     }
 
     entry.status = 'POSTED';
     entry.posting_date = new Date();
-    await this.store.saveJournalEntry(tenantId, entry);
+
+    if (this.prisma.isConfigured) {
+      await this.postConfiguredJournalEntry(tenantId, entry);
+    } else {
+      const lines = await this.postMemoryJournalEntry(tenantId, entry);
+      await this.outbox.append(
+        this.domainEvents.ledgerJournalPosted({ tenantId, entry, lines }),
+      );
+    }
+
     this.auditTrail.record({
       tenant_id: tenantId,
       action: 'ledger.entry.posted',
@@ -350,24 +362,168 @@ export class LedgerService {
     };
   }
 
-  private async updateAccountBalance(
+  private async postMemoryJournalEntry(
     tenantId: string,
-    accountCode: string,
-    amount: number,
-    type: 'DEBIT' | 'CREDIT'
+    entry: JournalEntry,
+  ): Promise<LedgerJournalPostedPayload['lines']> {
+    const lines: LedgerJournalPostedPayload['lines'] = [];
+
+    for (const line of entry.entries || []) {
+      const account = await this.store.getAccount(tenantId, line.account_code);
+      if (!account) {
+        throw new Error(`Account ${line.account_code} not found for tenant ${tenantId}`);
+      }
+
+      account.balance_debit += line.debit_amount || 0;
+      account.balance_credit += line.credit_amount || 0;
+      await this.store.saveAccount(tenantId, account);
+      lines.push(this.eventLine(line, account.currency));
+    }
+
+    await this.store.saveJournalEntry(tenantId, entry);
+    return lines;
+  }
+
+  private async postConfiguredJournalEntry(
+    tenantId: string,
+    entry: JournalEntry,
   ): Promise<void> {
-    const account = await this.store.getAccount(tenantId, accountCode);
-    if (!account) {
-      throw new Error(`Account ${accountCode} not found for tenant ${tenantId}`);
+    await this.prisma.ensureTenant(tenantId);
+
+    await this.prisma.db.$transaction(async (tx: any) => {
+      await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
+      const lines: LedgerJournalPostedPayload['lines'] = [];
+
+      for (const line of entry.entries || []) {
+        const [account] = await tx.$queryRaw<any[]>`
+          SELECT * FROM "ledger_accounts"
+          WHERE "tenantId" = ${tenantId} AND "accountCode" = ${line.account_code}
+          FOR UPDATE
+        `;
+        if (!account) {
+          throw new Error(`Account ${line.account_code} not found for tenant ${tenantId}`);
+        }
+
+        const balanceDebit = Number(account.balanceDebit) + (line.debit_amount || 0);
+        const balanceCredit = Number(account.balanceCredit) + (line.credit_amount || 0);
+        await tx.$executeRaw`
+          UPDATE "ledger_accounts"
+          SET "balanceDebit" = ${balanceDebit}, "balanceCredit" = ${balanceCredit}
+          WHERE "tenantId" = ${tenantId} AND "accountCode" = ${line.account_code}
+        `;
+        lines.push(this.eventLine(line, account.currency));
+      }
+
+      await tx.$executeRaw`
+        INSERT INTO "journal_entries" ("id", "tenantId", "transactionId", "description", "postedBy", "status", "entryDate", "postingDate", "lines", "metadata")
+        VALUES (${entry.entry_id}, ${tenantId}, ${entry.transaction_id}, ${entry.description}, ${entry.posted_by}, ${entry.status}, ${entry.entry_date}, ${entry.posting_date}, CAST(${this.json(entry.entries)} AS jsonb), CAST(${this.json(entry.metadata)} AS jsonb))
+        ON CONFLICT ("tenantId", "id") DO UPDATE SET
+          "transactionId" = EXCLUDED."transactionId",
+          "description" = EXCLUDED."description",
+          "postedBy" = EXCLUDED."postedBy",
+          "status" = EXCLUDED."status",
+          "entryDate" = EXCLUDED."entryDate",
+          "postingDate" = EXCLUDED."postingDate",
+          "lines" = EXCLUDED."lines",
+          "metadata" = EXCLUDED."metadata"
+      `;
+
+      await this.appendOutboxInTransaction(
+        tx,
+        this.domainEvents.ledgerJournalPosted({ tenantId, entry, lines }),
+      );
+    });
+  }
+
+  private async findPostedJournalEntry(
+    tenantId: string,
+    entryId: string,
+  ): Promise<JournalEntry | undefined> {
+    if (!this.prisma.isConfigured) {
+      return (await this.store.listJournalEntries(tenantId)).find(
+        (entry) => entry.entry_id === entryId && entry.status === 'POSTED',
+      );
     }
 
-    if (type === 'DEBIT') {
-      account.balance_debit += amount;
-    } else {
-      account.balance_credit += amount;
-    }
+    await this.prisma.setTenantContext(tenantId);
+    const [row] = await this.prisma.db.$queryRaw<any[]>`
+      SELECT * FROM "journal_entries"
+      WHERE "tenantId" = ${tenantId} AND "id" = ${entryId} AND "status" = 'POSTED'
+      LIMIT 1
+    `;
+    return row ? this.journalEntryFromRow(row) : undefined;
+  }
 
-    await this.store.saveAccount(tenantId, account);
+  private async ensureJournalPostedOutbox(tenantId: string, entry: JournalEntry): Promise<void> {
+    const lines = await this.eventLinesForEntry(tenantId, entry);
+    await this.outbox.append(this.domainEvents.ledgerJournalPosted({ tenantId, entry, lines }));
+  }
+
+  private async eventLinesForEntry(
+    tenantId: string,
+    entry: JournalEntry,
+  ): Promise<LedgerJournalPostedPayload['lines']> {
+    const lines: LedgerJournalPostedPayload['lines'] = [];
+    for (const line of entry.entries || []) {
+      const account = await this.store.getAccount(tenantId, line.account_code);
+      if (!account) {
+        throw new Error(`Account ${line.account_code} not found for tenant ${tenantId}`);
+      }
+      lines.push(this.eventLine(line, account.currency));
+    }
+    return lines;
+  }
+
+  private eventLine(line: LedgerLine, currency: string): LedgerJournalPostedPayload['lines'][number] {
+    return {
+      account_code: line.account_code,
+      currency,
+      debit: (line.debit_amount || 0).toFixed(2),
+      credit: (line.credit_amount || 0).toFixed(2),
+    };
+  }
+
+  private async appendOutboxInTransaction(tx: any, event: DomainEventEnvelope): Promise<void> {
+    const maxAttempts = Number(process.env.FENGINE_OUTBOX_MAX_ATTEMPTS || 3);
+    await tx.$executeRaw`
+      INSERT INTO "domain_outbox_events" (
+        "eventId", "tenantId", "eventType", "eventVersion", "occurredAt",
+        "aggregateType", "aggregateId", "aggregateVersion",
+        "correlationId", "causationId", "idempotencyKey",
+        "payload", "metadata", "status", "attempts", "maxAttempts", "availableAt", "updatedAt"
+      )
+      VALUES (
+        ${event.event_id}, ${event.tenant_id}, ${event.event_type}, ${event.event_version}, ${new Date(event.occurred_at)},
+        ${event.aggregate.type}, ${event.aggregate.id}, ${event.aggregate.version},
+        ${event.correlation_id}, ${event.causation_id}, ${event.idempotency_key || null},
+        CAST(${this.json(event.payload)} AS jsonb), CAST(${this.json(event.metadata)} AS jsonb),
+        'PENDING', 0, ${maxAttempts}, now(), now()
+      )
+      ON CONFLICT ("tenantId", "idempotencyKey") DO UPDATE SET
+        "updatedAt" = "domain_outbox_events"."updatedAt"
+    `;
+  }
+
+  private journalEntryFromRow(row: any): JournalEntry {
+    return {
+      entry_id: row.id,
+      entry_date: row.entryDate,
+      transaction_id: row.transactionId,
+      description: row.description,
+      posted_by: row.postedBy,
+      posting_date: row.postingDate,
+      entries: this.parseJson(row.lines),
+      status: row.status as JournalEntry['status'],
+      metadata: this.parseJson(row.metadata),
+    };
+  }
+
+  private parseJson<T>(value: any): T {
+    return typeof value === 'string' ? JSON.parse(value) : value;
+  }
+
+  private json<T>(value: T): string {
+    return JSON.stringify(value);
   }
 
   listAccounts(tenantId: string): Promise<ChartOfAccounts[]> {

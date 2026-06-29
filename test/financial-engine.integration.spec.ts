@@ -158,6 +158,88 @@ describe('Financial engine loan lifecycle integration', () => {
     expect(new Set(events.map((event) => event.envelope.idempotency_key)).size).toBe(2);
   });
 
+  it('publishes journal posted events idempotently', async () => {
+    await ledgerService.initializeChartOfAccounts(tenantId);
+    const entryId = `je_direct_${Date.now()}`;
+    const entry = {
+      entry_id: entryId,
+      entry_date: new Date(),
+      transaction_id: `txn_direct_${Date.now()}`,
+      description: 'Direct journal posting',
+      posted_by: 'SYSTEM',
+      posting_date: new Date(),
+      entries: [
+        { account_code: '10010', debit_amount: 2500 },
+        { account_code: '11100', credit_amount: 2500 },
+      ],
+      status: 'DRAFT' as const,
+      metadata: {},
+    };
+
+    const posted = await ledgerService.postJournalEntry(tenantId, entry);
+    const replayed = await ledgerService.postJournalEntry(tenantId, {
+      ...entry,
+      status: 'DRAFT',
+    });
+    const events = (await outboxService.list(tenantId)).filter(
+      (event) =>
+        event.envelope.event_type === 'ledger.journal_posted' &&
+        event.envelope.aggregate.id === entryId,
+    );
+
+    expect(posted.status).toBe('POSTED');
+    expect(replayed.entry_id).toBe(entryId);
+    expect(events).toHaveLength(1);
+    expect(events[0].envelope).toMatchObject({
+      event_type: 'ledger.journal_posted',
+      tenant_id: tenantId,
+      aggregate: { type: 'journal_entry', id: entryId, version: 1 },
+      payload: {
+        journal_entry_id: entryId,
+        transaction_id: entry.transaction_id,
+        line_count: 2,
+        totals: [{ currency: 'MZN', debit: '2500.00', credit: '2500.00' }],
+        lines: [
+          { account_code: '10010', currency: 'MZN', debit: '2500.00', credit: '0.00' },
+          { account_code: '11100', currency: 'MZN', debit: '0.00', credit: '2500.00' },
+        ],
+      },
+      metadata: {
+        producer: 'fengine',
+        data_classification: 'restricted',
+      },
+    });
+  });
+
+  it('does not publish unbalanced journal entries', async () => {
+    await ledgerService.initializeChartOfAccounts(tenantId);
+    const entryId = `je_unbalanced_${Date.now()}`;
+
+    await expect(
+      ledgerService.postJournalEntry(tenantId, {
+        entry_id: entryId,
+        entry_date: new Date(),
+        transaction_id: `txn_unbalanced_${Date.now()}`,
+        description: 'Unbalanced journal posting',
+        posted_by: 'SYSTEM',
+        posting_date: new Date(),
+        entries: [
+          { account_code: '10010', debit_amount: 2500 },
+          { account_code: '11100', credit_amount: 2000 },
+        ],
+        status: 'DRAFT',
+        metadata: {},
+      }),
+    ).rejects.toThrow('Journal entry not balanced');
+
+    const events = (await outboxService.list(tenantId)).filter(
+      (event) =>
+        event.envelope.event_type === 'ledger.journal_posted' &&
+        event.envelope.aggregate.id === entryId,
+    );
+    expect(events).toHaveLength(0);
+  });
+
   it('evaluates lending eligibility rules', async () => {
     const rules = await rulesEngine.initializeDefaultRules(tenantId, productId);
     expect(rules.length).toBeGreaterThan(10);
@@ -278,7 +360,7 @@ describe('Financial engine loan lifecycle integration', () => {
     expect(schedule[11].closing_balance).toBeLessThan(1);
   });
 
-  it('Process loan payment and verify GL posting', async () => {
+  it('processes loan payment and verifies GL posting', async () => {
     const loan = await loanService.applyForLoan(tenantId, {
       customer_id: customerId,
       product_id: productId,

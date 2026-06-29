@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import type { JournalEntry } from '../ledger/ledger.service';
 import { Loan } from '../loans/loan.service';
 import type { ProductSchema } from '../products/product-config.service';
 import {
   DomainEventEnvelope,
+  LedgerJournalPostedPayload,
   LendingPaymentPostedPayload,
   LoanDisbursedPayload,
   ProductsConfigurationPublishedPayload,
@@ -11,6 +13,50 @@ import {
 
 @Injectable()
 export class DomainEventFactory {
+  ledgerJournalPosted(input: {
+    tenantId: string;
+    entry: JournalEntry;
+    lines: LedgerJournalPostedPayload['lines'];
+    idempotencyKey?: string;
+    occurredAt?: Date;
+    aggregateVersion?: number;
+  }): DomainEventEnvelope<LedgerJournalPostedPayload> {
+    const occurredAt = input.occurredAt || new Date();
+    const eventId = `evt_${randomUUID()}`;
+    const idempotencyKey =
+      input.idempotencyKey || `${input.tenantId}:${input.entry.entry_id}:journal_posted`;
+    const totals = this.ledgerTotals(input.lines);
+
+    return {
+      event_id: eventId,
+      event_type: 'ledger.journal_posted',
+      event_version: 1,
+      occurred_at: occurredAt.toISOString(),
+      tenant_id: input.tenantId,
+      aggregate: {
+        type: 'journal_entry',
+        id: input.entry.entry_id,
+        version: input.aggregateVersion || 1,
+      },
+      correlation_id: `corr_${input.entry.transaction_id || input.entry.entry_id}`,
+      causation_id: input.entry.transaction_id || idempotencyKey,
+      idempotency_key: idempotencyKey,
+      payload: {
+        journal_entry_id: input.entry.entry_id,
+        transaction_id: input.entry.transaction_id,
+        posted_at: input.entry.posting_date.toISOString(),
+        line_count: input.lines.length,
+        totals,
+        lines: input.lines,
+      },
+      metadata: {
+        producer: 'fengine',
+        data_classification: 'restricted',
+        schema_uri: 'contracts/domain-events/event-envelope.schema.json',
+      },
+    };
+  }
+
   loanDisbursed(input: {
     tenantId: string;
     loan: Loan;
@@ -176,5 +222,22 @@ export class DomainEventFactory {
       return Math.max(1, product.updated_at.getTime());
     }
     return 1;
+  }
+
+  private ledgerTotals(lines: LedgerJournalPostedPayload['lines']): LedgerJournalPostedPayload['totals'] {
+    const totals = new Map<string, { debit: number; credit: number }>();
+    for (const line of lines) {
+      const total = totals.get(line.currency) || { debit: 0, credit: 0 };
+      total.debit += Number(line.debit);
+      total.credit += Number(line.credit);
+      totals.set(line.currency, total);
+    }
+    return [...totals.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([currency, total]) => ({
+        currency,
+        debit: total.debit.toFixed(2),
+        credit: total.credit.toFixed(2),
+      }));
   }
 }
