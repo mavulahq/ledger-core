@@ -1,5 +1,10 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Req } from '@nestjs/common';
-import { OODAStage, Rule, RuleType, RulesEngineService } from '../rules-engine/rules-engine.service';
+import {
+  Rule,
+  RuleEvaluationStage,
+  RuleType,
+  RulesEngineService,
+} from '../rules-engine/rules-engine.service';
 
 @Controller('products/:productId/rules')
 export class RulesController {
@@ -28,7 +33,7 @@ export class RulesController {
       action: body.action || {},
       priority: Number(body.priority || 0),
       enabled: body.enabled ?? true,
-      applies_to: body.applies_to as OODAStage[] | undefined,
+      applies_to: body.applies_to as RuleEvaluationStage[] | undefined,
       created_at: now,
       updated_at: now,
     };

@@ -2,8 +2,7 @@
  * getfluxo.io - Financial Engine Integration Test
  * Copyright (c) 2025 getfluxo.io
  *
- * Test: Complete loan lifecycle (apply → approve → disburse → payment)
- * This demonstrates all modules working together: Products, Rules, Calculations, GL, Transactions, Loans
+ * Test: loan lifecycle integration across products, rules, calculations, ledger, transactions, and loans.
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
@@ -21,13 +20,8 @@ import { AuditTrailService } from '../src/services/audit-trail.service';
 import { FengineStoreService } from '../src/services/fengine-store.service';
 import { DomainEventFactory } from '../src/domain-events/domain-event-factory.service';
 import { DomainOutboxService } from '../src/domain-events/domain-outbox.service';
-import {
-  calculatePMT,
-  getMonthlyRateFromAPR,
-  generateAmortizationSchedule,
-} from '../src/calculations/financial-calculations';
 
-describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
+describe('Financial engine loan lifecycle integration', () => {
   let loanService: LoanService;
   let transactionService: TransactionService;
   let rulesEngine: RulesEngineService;
@@ -69,11 +63,7 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     outboxService = module.get<DomainOutboxService>(DomainOutboxService);
   });
 
-  it('[OBSERVE] Customer applies for loan', async () => {
-    // OBSERVE: Collect customer data and loan request
-    console.log('\n=== PHASE 1: OBSERVE ===');
-    console.log('Customer submits loan application...\n');
-
+  it('creates a pending loan application', async () => {
     const loan = await loanService.applyForLoan(tenantId, {
       customer_id: customerId,
       product_id: productId,
@@ -88,11 +78,6 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     expect(loan.status).toBe(LoanStatus.PENDING_APPROVAL);
     expect(loan.principal_amount).toBe(25000);
     expect(loan.term_months).toBe(12);
-
-    console.log(`✓ Loan application created: ${loan.id}`);
-    console.log(`  Customer: ${loan.customer_id}`);
-    console.log(`  Amount: ${loan.principal_amount} MZN`);
-    console.log(`  Term: ${loan.term_months} months`);
   });
 
   it('publishes product configuration events idempotently by product version', async () => {
@@ -173,30 +158,16 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     expect(new Set(events.map((event) => event.envelope.idempotency_key)).size).toBe(2);
   });
 
-  it('[ORIENT] Rules Engine evaluates eligibility', async () => {
-    // ORIENT: Apply business rules and decision logic
-    console.log('\n=== PHASE 2: ORIENT ===');
-    console.log('Evaluating business rules...\n');
-
-    // Initialize default rules for product
+  it('evaluates lending eligibility rules', async () => {
     const rules = await rulesEngine.initializeDefaultRules(tenantId, productId);
     expect(rules.length).toBeGreaterThan(10);
 
-    console.log(`✓ Initialized ${rules.length} rules for product\n`);
-
-    // Simulate customer profile
     const customerCredit = {
       credit_score: 650,
       income: 120000,
       employment_years: 5,
     };
 
-    console.log('Customer Profile:');
-    console.log(`  Credit Score: ${customerCredit.credit_score}`);
-    console.log(`  Annual Income: ${customerCredit.income} MZN`);
-    console.log(`  Employment: ${customerCredit.employment_years} years\n`);
-
-    // Evaluate rules
     const ruleResults = await rulesEngine.evaluateRules(productId, {
       customer_id: customerId,
       customer_credit_score: customerCredit.credit_score,
@@ -208,21 +179,10 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     const passed = ruleResults.filter((r) => r.passed).length;
     const failed = ruleResults.filter((r) => !r.passed).length;
 
-    console.log(`Rule Evaluation Results:`);
-    console.log(`  Passed: ${passed}`);
-    console.log(`  Failed: ${failed}\n`);
-
-    ruleResults.slice(0, 5).forEach((result) => {
-      const status = result.passed ? '✓' : '✗';
-      console.log(`  ${status} ${result.rule_type}: ${result.passed ? 'PASS' : 'FAIL'}`);
-    });
+    expect(passed).toBeGreaterThan(failed);
   });
 
-  it('[DECIDE] Auto-approve loan and calculate terms', async () => {
-    // DECIDE: Make approval decision and calculate financial terms
-    console.log('\n=== PHASE 3: DECIDE ===');
-    console.log('Making approval decision and calculating terms...\n');
-
+  it('approves a loan and calculates repayment terms', async () => {
     const loan = await loanService.applyForLoan(tenantId, {
       customer_id: customerId,
       product_id: productId,
@@ -244,27 +204,11 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     expect(approval.approved).toBe(true);
     expect(approval.approved_amount).toBe(25000);
     expect(approval.approved_rate).toBeGreaterThan(0);
-
-    console.log(`✓ Loan APPROVED: ${loan.id}\n`);
-    console.log(`Approval Details:`);
-    console.log(`  Status: ${approval.status}`);
-    console.log(`  Approved Amount: ${approval.approved_amount} MZN`);
-    console.log(`  Approved Rate: ${(approval.approved_rate! * 100).toFixed(2)}% monthly`);
-    console.log(`  Monthly Payment: ${loan.monthly_payment.toFixed(2)} MZN`);
-    console.log(`  Total Interest: ${loan.total_interest.toFixed(2)} MZN`);
-    console.log(`  Total Repayable: ${loan.total_repayable.toFixed(2)} MZN\n`);
-
-    console.log(
-      `Rules Passed: ${approval.rules_passed}/${approval.rules_passed + approval.rules_failed}`,
-    );
+    expect(loan.monthly_payment).toBeGreaterThan(0);
+    expect(loan.total_repayable).toBeGreaterThan(loan.principal_amount);
   });
 
-  it('[ACT] Disburse loan and record GL entries', async () => {
-    // ACT: Execute the approved decision (disburse, post GL, notify customer)
-    console.log('\n=== PHASE 4: ACT ===');
-    console.log('Disbursing loan and recording transactions...\n');
-
-    // Create and approve loan first
+  it('disburses an approved loan and records ledger entries', async () => {
     const loan = await loanService.applyForLoan(tenantId, {
       customer_id: customerId,
       product_id: productId,
@@ -281,27 +225,14 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
       employment_years: 5,
     });
 
-    // Initialize GL for tenant
     const coa = await ledgerService.initializeChartOfAccounts(tenantId);
     expect(coa.length).toBeGreaterThan(20);
-    console.log(`✓ Chart of Accounts initialized: ${coa.length} accounts\n`);
 
-    // Disburse loan
     const disburse = await loanService.disburseLoan(tenantId, loan, {
       idempotencyKey: `idem_disburse_act_${loan.id}`,
     });
     expect(disburse.success).toBe(true);
 
-    console.log(`✓ Loan Disbursed\n`);
-    console.log(`Disbursement Details:`);
-    console.log(`  Transaction ID: ${disburse.disbursement_id}`);
-    console.log(`  Amount Disbursed: ${loan.disbursed_amount} MZN`);
-    console.log(`  Origination Fee: ${loan.origination_fee_amount.toFixed(2)} MZN`);
-    console.log(
-      `  Net Amount: ${(loan.disbursed_amount - loan.origination_fee_amount).toFixed(2)} MZN\n`,
-    );
-
-    // Verify loan status
     expect(loan.status).toBe(LoanStatus.ACTIVE);
     expect(loan.disbursement_date).toBeDefined();
     await expect(outboxService.list(tenantId)).resolves.toEqual(
@@ -320,13 +251,9 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
         }),
       ]),
     );
-    console.log(`Loan Status: ${loan.status} ✓`);
   });
 
-  it('Generate and display amortization schedule', async () => {
-    console.log('\n=== AMORTIZATION SCHEDULE ===\n');
-
-    // Create approved loan
+  it('generates an amortization schedule', async () => {
     const loan = await loanService.applyForLoan(tenantId, {
       customer_id: customerId,
       product_id: productId,
@@ -345,33 +272,13 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
 
     const schedule = loanService.generateAmortizationSchedule(loan);
 
-    console.log('Payment Schedule:');
-    console.log('Month | Payment Date | Opening | Payment | Principal | Interest | Closing');
-    console.log('------|--------------|---------|---------|-----------|----------|-------');
-
-    schedule.slice(0, 6).forEach((item) => {
-      const dateStr =
-        item.payment_date instanceof Date
-          ? item.payment_date.toISOString().split('T')[0]
-          : item.payment_date;
-
-      console.log(
-        `${String(item.installment).padEnd(5)} | ${dateStr} | ` +
-          `${String(Math.round(item.opening_balance)).padStart(7)} | ` +
-          `${String(Math.round(item.payment)).padStart(7)} | ` +
-          `${String(Math.round(item.principal)).padStart(9)} | ` +
-          `${String(Math.round(item.interest)).padStart(8)} | ` +
-          `${String(Math.round(item.closing_balance)).padStart(7)}`,
-      );
-    });
-
-    console.log('\n... (showing first 6 of 12 payments)');
+    expect(schedule).toHaveLength(12);
+    expect(schedule[0].opening_balance).toBe(25000);
+    expect(schedule[0].payment).toBeGreaterThan(0);
+    expect(schedule[11].closing_balance).toBeLessThan(1);
   });
 
   it('Process loan payment and verify GL posting', async () => {
-    console.log('\n=== PAYMENT PROCESSING ===\n');
-
-    // Create disbursed loan
     const loan = await loanService.applyForLoan(tenantId, {
       customer_id: customerId,
       product_id: productId,
@@ -395,8 +302,6 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     // Initialize GL
     await ledgerService.initializeChartOfAccounts(tenantId);
 
-    // Process payment
-    console.log('Customer payment received: 2,500 MZN\n');
     const payment = await loanService.processLoanPayment(tenantId, loan, 2500, {
       idempotencyKey: `idem_payment_post_${loan.id}`,
     });
@@ -425,17 +330,9 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
       ]),
     );
 
-    console.log(`✓ Payment Posted\n`);
-    console.log(`Payment Allocation:`);
-    console.log(`  Principal Paid: ${payment.principal_paid.toFixed(2)} MZN`);
-    console.log(`  Interest Paid: ${payment.interest_paid.toFixed(2)} MZN`);
-    console.log(`  Balance Remaining: ${payment.balance_remaining.toFixed(2)} MZN\n`);
-
-    // Show loan progress
     const status = loanService.getLoanStatus(loan);
-    console.log(`Loan Progress:`);
-    console.log(`  Principal Remaining: ${status.remaining_balance.toFixed(2)} MZN`);
-    console.log(`  Progress: ${status.progress_percent.toFixed(1)}% paid`);
+    expect(status.remaining_balance).toBe(payment.balance_remaining);
+    expect(status.progress_percent).toBeGreaterThan(0);
   });
 
   it('replays disbursement and payment idempotently', async () => {
@@ -571,47 +468,6 @@ describe('Financial Engine Integration: Loan Lifecycle (OODA)', () => {
     expect(repairedEvent?.envelope.aggregate.version).toBe(repairedLoan?.version);
   });
 
-  it('Complete OODA cycle summary', async () => {
-    console.log('\n=== COMPLETE OODA CYCLE SUMMARY ===\n');
-
-    const summary = `
-OBSERVE → ORIENT → DECIDE → ACT
-
-1. OBSERVE (Collection & Intelligence)
-   ✓ Customer applies for loan (25,000 MZN for 12 months)
-   ✓ System collects: credit score, income, employment history
-   
-2. ORIENT (Analysis & Rules Evaluation)
-   ✓ Rules Engine evaluates 15+ business rules
-   ✓ Credit score check: 650 ≥ 300 ✓
-   ✓ KYC verification: VERIFIED ✓
-   ✓ Max loan amount: 25,000 ≤ 50,000 ✓
-   ✓ All critical rules PASSED
-   
-3. DECIDE (Approval & Term Calculation)
-   ✓ Auto-approval decision: APPROVED
-   ✓ Interest rate: 2.75% monthly (2.5% base + 0.25% credit adjustment)
-   ✓ Monthly payment: 2,346.42 MZN
-   ✓ Total interest: 2,157.04 MZN
-   
-4. ACT (Execution & GL Posting)
-   ✓ Funds disbursed: 25,000 MZN
-   ✓ Origination fee: 500 MZN (2%)
-   ✓ GL Entry:
-     - DEBIT: Loan Portfolio (11100): 25,000
-     - CREDIT: Cash (10010): 25,000
-   ✓ Loan status: ACTIVE
-   ✓ Customer receives SMS/Email notification
-   
-RESULT: Complete loan lifecycle in < 500ms
-        Auto-approval with full compliance
-        Instant disbursement with GL posting
-        Zero manual intervention required
-    `;
-
-    console.log(summary);
-    expect(true).toBe(true);
-  });
 });
 
 function countLoanEvents(events: any[], loanId: string, eventType: string): number {

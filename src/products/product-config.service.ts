@@ -128,8 +128,7 @@ export class ProductConfigService {
   ) {}
 
   /**
-   * Create or update auto-configurable product for tenant
-   * OODA: Observe (existing products) → Orient (defaults) → Decide (config) → Act (persist)
+   * Create or update a tenant product configuration.
    */
   async createOrUpdateProduct(
     tenantId: string,
@@ -144,7 +143,6 @@ export class ProductConfigService {
         : await this.createOrUpdateMemoryProduct(tenantId, productId, productType, config);
 
       this.recordProductUpsertAudit(tenantId, productId, productType, product);
-      console.log(`✓ Product created: ${productId} for tenant ${tenantId}`);
       return product;
     });
   }

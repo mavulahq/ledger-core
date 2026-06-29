@@ -125,7 +125,7 @@ export class TransactionService {
         return this.failedResult(txnId, 'Invalid payment amount');
       }
 
-      // Step 2: Evaluate rules (OODA: Evaluate rules before acting)
+      // Step 2: Evaluate posting rules before ledger mutation.
       const ruleResults = await this.rulesEngine.evaluateRules(params.productId, {
         tenant_id: params.tenantId,
         customer_id: params.customerId,
@@ -163,7 +163,6 @@ export class TransactionService {
 
       // Step 6: Update customer account
       // In production: UPDATE accounts SET balance = balance - principal WHERE id = account_id
-      console.log(`✓ Payment processed: ${txnId} (Principal: ${allocation.principal_payment}, Interest: ${allocation.interest_payment})`);
 
       const result: SettlementResult = {
         transaction_id: txnId,
@@ -212,7 +211,6 @@ export class TransactionService {
 
       return result;
     } catch (error) {
-      console.error(`Payment processing failed for ${txnId}:`, error);
       return this.failedResult(txnId, (error as Error).message);
     }
   }
@@ -291,7 +289,6 @@ export class TransactionService {
       };
       await this.store.saveTransaction(params.tenantId, txn);
 
-      console.log(`✓ Disbursement processed: ${txnId} (Principal: ${params.principal})`);
       this.auditTrail.record({
         tenant_id: params.tenantId,
         action: 'transaction.disbursement.posted',
@@ -307,7 +304,6 @@ export class TransactionService {
 
       return result;
     } catch (error) {
-      console.error(`Disbursement processing failed for ${txnId}:`, error);
       return this.failedResult(txnId, (error as Error).message);
     }
   }
@@ -351,7 +347,6 @@ export class TransactionService {
         timestamp: new Date(),
       };
     } catch (error) {
-      console.error(`Interest accrual failed for ${txnId}:`, error);
       return this.failedResult(txnId, (error as Error).message);
     }
   }
@@ -360,7 +355,6 @@ export class TransactionService {
    * Reverse transaction (refund/cancellation)
    */
   async reverseTransaction(tenantId: string, transactionId: string): Promise<SettlementResult> {
-    console.log(`Reversing transaction: ${transactionId}`);
     this.auditTrail.record({
       tenant_id: tenantId,
       action: 'transaction.reversed',

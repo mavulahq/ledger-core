@@ -121,7 +121,6 @@ export class SchemaManagerService {
     // 3. Create indexes on frequently-queried fields
     // 4. Create RLS policies for tenant isolation
 
-    console.log(`✓ Schema created: ${schema.entity_id} (${schema.display_name})`);
     return schema;
   }
 
@@ -193,15 +192,12 @@ export class SchemaManagerService {
    */
   defineFormLayout(entityId: string, layout: FormLayout): void {
     // Store layout for UI to render
-    console.log(`Form layout defined for ${entityId}:`);
-    for (const section of layout.sections) {
-      console.log(`  Section: ${section.title} (${section.fields.join(', ')})`);
-    }
+    void entityId;
+    void layout;
   }
 
   /**
-   * Define custom workflow triggered by events
-   * Example: When loan is approved, send SMS notification
+   * Define a workflow triggered by an engine event.
    */
   async createWorkflow(
     tenantId: string,
@@ -230,7 +226,6 @@ export class SchemaManagerService {
       metadata: { trigger: wf.trigger, steps: wf.steps.length },
     });
 
-    console.log(`✓ Workflow created: ${wf.workflow_id} (${wf.name})`);
     return wf;
   }
 
@@ -393,11 +388,8 @@ export class SchemaManagerService {
     for (const step of workflow.steps) {
       // Check condition
       if (step.condition && !this.evaluateCondition(step.condition, context)) {
-        console.log(`  Step ${step.order} skipped (condition not met): ${step.name}`);
         continue;
       }
-
-      console.log(`  Executing step ${step.order}: ${step.name}`);
 
       const result = await this.executeStep(step, context);
       results.push({
@@ -412,7 +404,6 @@ export class SchemaManagerService {
       }
     }
 
-    console.log(`✓ Workflow executed: ${workflowId}`);
     return { success: true, results };
   }
 
@@ -434,37 +425,36 @@ export class SchemaManagerService {
       case 'CALCULATE':
         return this.calculateValue(step.parameters, context);
       default:
-        console.warn(`Unknown step action: ${step.action}`);
         return { success: true, data: { action: step.action, status: 'skipped' } };
     }
   }
 
   private async sendSMS(params: Record<string, any>): Promise<{ success: boolean }> {
-    console.log(`    📱 SMS to ${params.to}: "${params.message}"`);
+    void params;
     // In production: integrate with SMS provider (Vonage, Twilio)
     return { success: true };
   }
 
   private async sendEmail(params: Record<string, any>): Promise<{ success: boolean }> {
-    console.log(`    📧 Email to ${params.to}: ${params.subject}`);
+    void params;
     // In production: integrate with email provider (SendGrid, AWS SES)
     return { success: true };
   }
 
   private async updateField(params: Record<string, any>): Promise<{ success: boolean }> {
-    console.log(`    🔄 Update ${params.entity}.${params.field} = ${params.value}`);
+    void params;
     // In production: UPDATE table SET field = value
     return { success: true };
   }
 
   private async logEvent(params: Record<string, any>): Promise<{ success: boolean }> {
-    console.log(`    📝 Event: ${params.event_type} (${params.severity})`);
+    void params;
     // In production: INSERT into audit_log
     return { success: true };
   }
 
   private async chargeFee(params: Record<string, any>): Promise<{ success: boolean }> {
-    console.log(`    💰 Charge fee: ${params.fee_type} to GL ${params.gl_account}`);
+    void params;
     // In production: POST transaction + GL entry
     return { success: true };
   }
@@ -474,7 +464,6 @@ export class SchemaManagerService {
     context: Record<string, any>
   ): Promise<{ success: boolean; data: any }> {
     const result = evaluateNumericExpression(String(params.formula || ''), context);
-    console.log(`    Calculated: ${params.formula} = ${result}`);
     return { success: true, data: result };
   }
 

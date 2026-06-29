@@ -229,7 +229,6 @@ export class LedgerService {
       phase: 'ACT',
       metadata: { accounts: coa.length },
     });
-    console.log(`✓ Chart of Accounts initialized for tenant ${tenantId} (${coa.length} accounts)`);
     return coa;
   }
 
@@ -272,7 +271,6 @@ export class LedgerService {
         lines: entry.entries.length,
       },
     });
-    console.log(`✓ Journal entry posted: ${entry.entry_id}`);
 
     return entry;
   }
@@ -370,7 +368,6 @@ export class LedgerService {
     }
 
     await this.store.saveAccount(tenantId, account);
-    console.log(`  Update account ${accountCode}: ${type} ${amount}`);
   }
 
   listAccounts(tenantId: string): Promise<ChartOfAccounts[]> {

@@ -14,7 +14,12 @@ import { AuditTrailService } from '../services/audit-trail.service';
 import { FengineStoreService } from '../services/fengine-store.service';
 import { evaluateBooleanExpression } from '../utils/safe-expression-evaluator';
 
-export type OODAStage = 'ORIGINATION' | 'PAYMENT' | 'DISBURSEMENT' | 'CONFIGURATION' | 'MONITORING';
+export type RuleEvaluationStage =
+  | 'ORIGINATION'
+  | 'PAYMENT'
+  | 'DISBURSEMENT'
+  | 'CONFIGURATION'
+  | 'MONITORING';
 
 export enum RuleType {
   // Eligibility rules
@@ -54,7 +59,7 @@ export interface Rule {
   action: Record<string, any>;  // Parameters for action
   priority: number;          // Higher = more important (evaluated first)
   enabled: boolean;
-  applies_to?: OODAStage[];
+  applies_to?: RuleEvaluationStage[];
   created_at: Date;
   updated_at: Date;
 }
@@ -74,7 +79,7 @@ export interface EvaluationContext {
   transaction_amount?: number;
   transaction_type?: string;
   transaction_date?: Date;
-  stage?: OODAStage;
+  stage?: RuleEvaluationStage;
   
   [key: string]: any;
 }
@@ -283,7 +288,6 @@ export class RulesEngineService {
 
     this.rules.set(productId, rules);
     await this.store.saveRules(tenantId, productId, rules);
-    console.log(`✓ Initialized ${rules.length} rules for product ${productId}`);
 
     return rules;
   }
@@ -325,11 +329,16 @@ export class RulesEngineService {
 
         // Fast-fail on critical rules (eligibility, compliance)
         if (!passed && this.isCriticalRule(rule.rule_type)) {
-          console.warn(`✗ Critical rule failed: ${rule.rule_type}`);
           break;
         }
       } catch (error) {
-        console.error(`Error evaluating rule ${rule.id}:`, error);
+        results.push({
+          rule_id: rule.id,
+          rule_type: rule.rule_type,
+          passed: false,
+          actions: [],
+          reason: (error as Error).message,
+        });
       }
     }
 

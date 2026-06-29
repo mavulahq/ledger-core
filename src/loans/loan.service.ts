@@ -12,7 +12,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../services/prisma.service';
 import { Transaction, TransactionService } from '../transactions/transaction.service';
-import { OODAStage, RulesEngineService } from '../rules-engine/rules-engine.service';
+import { RuleEvaluationStage, RulesEngineService } from '../rules-engine/rules-engine.service';
 import { ProductConfigService } from '../products/product-config.service';
 import { AuditTrailService } from '../services/audit-trail.service';
 import { FengineStoreService } from '../services/fengine-store.service';
@@ -131,7 +131,7 @@ export class LoanService {
   ) {}
 
   /**
-   * Apply for loan (OODA: Observe customer, Orient to rules, Decide approval)
+   * Create a loan application after validating product bounds.
    */
   async applyForLoan(tenantId: string, application: LoanApplication): Promise<Loan> {
     const loanId = `loan_${application.customer_id}_${Date.now()}`;
@@ -200,7 +200,6 @@ export class LoanService {
       },
     });
 
-    console.log(`✓ Loan application created: ${loanId}`);
     return loan;
   }
 
@@ -225,7 +224,7 @@ export class LoanService {
       customer_employment_years: customerCredit.employment_years,
       customer_kyc_status: 'VERIFIED',
       transaction_amount: loan.principal_amount,
-      stage: 'ORIGINATION' satisfies OODAStage,
+      stage: 'ORIGINATION' satisfies RuleEvaluationStage,
     });
 
     const passed = ruleResults.filter((r) => r.passed).length;
@@ -280,9 +279,6 @@ export class LoanService {
         },
       });
 
-      console.log(
-        `✓ Loan approved: ${loan.id} (Monthly: ${monthlyPayment.toFixed(2)}, Rate: ${(monthlyRate * 100).toFixed(2)}%)`,
-      );
     } else {
       loan.status = LoanStatus.REJECTED;
       this.bumpLoanVersion(loan);
@@ -299,7 +295,6 @@ export class LoanService {
             .map((result) => result.rule_type),
         },
       });
-      console.log(`✗ Loan rejected: ${loan.id} (Failed rules: ${failed})`);
     }
 
     return {
@@ -422,8 +417,6 @@ export class LoanService {
           amount: loan.disbursed_amount,
         },
       });
-
-      console.log(`✓ Loan disbursed: ${loan.id} (Amount: ${loan.principal_amount})`);
 
       return {
         success: true,

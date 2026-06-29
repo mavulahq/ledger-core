@@ -14,7 +14,7 @@ export class DomainOutboxPublisherService implements OnModuleInit, OnModuleDestr
   onModuleInit(): void {
     if (process.env.FENGINE_OUTBOX_PUBLISHER_ENABLED === 'true') {
       this.timer = setInterval(
-        () => void this.publishPending().catch((error) => console.error('Outbox publish failed', error)),
+        () => void this.publishPending().catch(() => undefined),
         Number(process.env.FENGINE_OUTBOX_POLL_MS || 1000),
       );
     }
