@@ -301,7 +301,7 @@ model ProjectionCheckpoint {
   lastEventVersion Int?
   lastOccurredAt   DateTime?
   eventCount       Int      @default(0)
-  lagMs            Int      @default(0)
+  lagMs            BigInt   @default(0)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @default(now()) @updatedAt
   tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)

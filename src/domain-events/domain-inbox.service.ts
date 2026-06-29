@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../services/prisma.service';
 import {
   DomainEventEnvelope,
@@ -92,6 +93,22 @@ export class DomainInboxService {
     );
   }
 
+  async reset(tenantId: string, eventId: string, consumerName: string): Promise<void> {
+    const key = this.key(eventId, consumerName);
+    if (!this.prisma.isConfigured) {
+      this.memory.delete(key);
+      return;
+    }
+
+    await this.enterTenant(tenantId);
+    await this.prisma.db.$executeRaw`
+      DELETE FROM "domain_inbox_events"
+      WHERE "tenantId" = ${tenantId}
+        AND "eventId" = ${eventId}
+        AND "consumerName" = ${consumerName}
+    `;
+  }
+
   private async setFinalStatus(
     tenantId: string,
     eventId: string,
@@ -148,8 +165,8 @@ export class DomainInboxService {
     db = this.prisma.db,
   ): Promise<DomainInboxRecord | undefined> {
     const rows = (await db.$queryRaw`
-      INSERT INTO "domain_inbox_events" ("eventId", "consumerName", "tenantId", "status", "updatedAt")
-      VALUES (${envelope.event_id}, ${consumerName}, ${envelope.tenant_id}, 'PROCESSING', now())
+      INSERT INTO "domain_inbox_events" ("id", "eventId", "consumerName", "tenantId", "status", "updatedAt")
+      VALUES (${randomUUID()}, ${envelope.event_id}, ${consumerName}, ${envelope.tenant_id}, 'PROCESSING', now())
       ON CONFLICT ("eventId", "consumerName") DO NOTHING
       RETURNING *
     `) as any[];

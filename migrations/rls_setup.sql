@@ -29,6 +29,8 @@ ALTER TABLE public.rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_trail_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.domain_outbox_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.domain_inbox_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.read_projections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.projection_checkpoints ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.accounts FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.products FORCE ROW LEVEL SECURITY;
@@ -43,6 +45,8 @@ ALTER TABLE public.rules FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_trail_events FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.domain_outbox_events FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.domain_inbox_events FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.read_projections FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.projection_checkpoints FORCE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS tenant_isolation_accounts ON public.accounts;
 CREATE POLICY tenant_isolation_accounts ON public.accounts
@@ -106,6 +110,16 @@ CREATE POLICY tenant_isolation_domain_outbox_events ON public.domain_outbox_even
 
 DROP POLICY IF EXISTS tenant_isolation_domain_inbox_events ON public.domain_inbox_events;
 CREATE POLICY tenant_isolation_domain_inbox_events ON public.domain_inbox_events
+  USING ("tenantId" = public.current_tenant_id() OR public.current_tenant_id() = '*')
+  WITH CHECK ("tenantId" = public.current_tenant_id() OR public.current_tenant_id() = '*');
+
+DROP POLICY IF EXISTS tenant_isolation_read_projections ON public.read_projections;
+CREATE POLICY tenant_isolation_read_projections ON public.read_projections
+  USING ("tenantId" = public.current_tenant_id() OR public.current_tenant_id() = '*')
+  WITH CHECK ("tenantId" = public.current_tenant_id() OR public.current_tenant_id() = '*');
+
+DROP POLICY IF EXISTS tenant_isolation_projection_checkpoints ON public.projection_checkpoints;
+CREATE POLICY tenant_isolation_projection_checkpoints ON public.projection_checkpoints
   USING ("tenantId" = public.current_tenant_id() OR public.current_tenant_id() = '*')
   WITH CHECK ("tenantId" = public.current_tenant_id() OR public.current_tenant_id() = '*');
 

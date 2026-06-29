@@ -8,7 +8,7 @@ export class ProjectionsController {
 
   @Get('status')
   status(@Req() req: any) {
-    return this.projections.status(req.tenantId);
+    return this.projections.status(this.tenant(req));
   }
 
   @Get('loan-activity')
