@@ -88,6 +88,24 @@ export interface ProductsConfigurationPublishedPayload {
   configuration_version: number;
 }
 
+export interface LedgerJournalPostedPayload {
+  journal_entry_id: string;
+  transaction_id: string;
+  posted_at: string;
+  line_count: number;
+  totals: Array<{
+    currency: string;
+    debit: string;
+    credit: string;
+  }>;
+  lines: Array<{
+    account_code: string;
+    currency: string;
+    debit: string;
+    credit: string;
+  }>;
+}
+
 export function assertDomainEventEnvelope(value: any): asserts value is DomainEventEnvelope {
   if (!value || typeof value !== 'object') {
     throw new Error('domain event envelope must be an object');
