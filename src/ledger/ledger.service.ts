@@ -93,6 +93,11 @@ export interface GeneralLedgerReport {
   closing_balance_type: 'DEBIT' | 'CREDIT';
 }
 
+interface ConfiguredJournalPostResult {
+  entry: JournalEntry;
+  posted: boolean;
+}
+
 @Injectable()
 export class LedgerService {
   constructor(
@@ -264,7 +269,10 @@ export class LedgerService {
     entry.posting_date = new Date();
 
     if (this.prisma.isConfigured) {
-      await this.postConfiguredJournalEntry(tenantId, entry);
+      const result = await this.postConfiguredJournalEntry(tenantId, entry);
+      if (!result.posted) {
+        return result.entry;
+      }
     } else {
       const lines = await this.postMemoryJournalEntry(tenantId, entry);
       await this.outbox.append(
@@ -387,12 +395,43 @@ export class LedgerService {
   private async postConfiguredJournalEntry(
     tenantId: string,
     entry: JournalEntry,
-  ): Promise<void> {
+  ): Promise<ConfiguredJournalPostResult> {
     await this.prisma.ensureTenant(tenantId);
 
-    await this.prisma.db.$transaction(async (tx: any) => {
+    return this.prisma.db.$transaction(async (tx: any) => {
       await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
       const lines: LedgerJournalPostedPayload['lines'] = [];
+
+      const inserted = await tx.$queryRaw<any[]>`
+        INSERT INTO "journal_entries" ("id", "tenantId", "transactionId", "description", "postedBy", "status", "entryDate", "postingDate", "lines", "metadata")
+        VALUES (${entry.entry_id}, ${tenantId}, ${entry.transaction_id}, ${entry.description}, ${entry.posted_by}, ${entry.status}, ${entry.entry_date}, ${entry.posting_date}, CAST(${this.json(entry.entries)} AS jsonb), CAST(${this.json(entry.metadata)} AS jsonb))
+        ON CONFLICT ("tenantId", "id") DO NOTHING
+        RETURNING *
+      `;
+
+      if (inserted.length === 0) {
+        const [existing] = await tx.$queryRaw<any[]>`
+          SELECT * FROM "journal_entries"
+          WHERE "tenantId" = ${tenantId} AND "id" = ${entry.entry_id}
+          FOR UPDATE
+        `;
+        if (!existing) {
+          throw new Error(`Journal entry ${entry.entry_id} was not persisted`);
+        }
+        const existingEntry = this.journalEntryFromRow(existing);
+        if (existingEntry.status !== 'POSTED') {
+          throw new Error(`Journal entry ${entry.entry_id} already exists with status ${existingEntry.status}`);
+        }
+        await this.appendOutboxInTransaction(
+          tx,
+          this.domainEvents.ledgerJournalPosted({
+            tenantId,
+            entry: existingEntry,
+            lines: await this.eventLinesForEntryInTransaction(tx, tenantId, existingEntry),
+          }),
+        );
+        return { entry: existingEntry, posted: false };
+      }
 
       for (const line of entry.entries || []) {
         const [account] = await tx.$queryRaw<any[]>`
@@ -414,24 +453,12 @@ export class LedgerService {
         lines.push(this.eventLine(line, account.currency));
       }
 
-      await tx.$executeRaw`
-        INSERT INTO "journal_entries" ("id", "tenantId", "transactionId", "description", "postedBy", "status", "entryDate", "postingDate", "lines", "metadata")
-        VALUES (${entry.entry_id}, ${tenantId}, ${entry.transaction_id}, ${entry.description}, ${entry.posted_by}, ${entry.status}, ${entry.entry_date}, ${entry.posting_date}, CAST(${this.json(entry.entries)} AS jsonb), CAST(${this.json(entry.metadata)} AS jsonb))
-        ON CONFLICT ("tenantId", "id") DO UPDATE SET
-          "transactionId" = EXCLUDED."transactionId",
-          "description" = EXCLUDED."description",
-          "postedBy" = EXCLUDED."postedBy",
-          "status" = EXCLUDED."status",
-          "entryDate" = EXCLUDED."entryDate",
-          "postingDate" = EXCLUDED."postingDate",
-          "lines" = EXCLUDED."lines",
-          "metadata" = EXCLUDED."metadata"
-      `;
-
       await this.appendOutboxInTransaction(
         tx,
         this.domainEvents.ledgerJournalPosted({ tenantId, entry, lines }),
       );
+
+      return { entry: this.journalEntryFromRow(inserted[0]), posted: true };
     });
   }
 
@@ -466,6 +493,25 @@ export class LedgerService {
     const lines: LedgerJournalPostedPayload['lines'] = [];
     for (const line of entry.entries || []) {
       const account = await this.store.getAccount(tenantId, line.account_code);
+      if (!account) {
+        throw new Error(`Account ${line.account_code} not found for tenant ${tenantId}`);
+      }
+      lines.push(this.eventLine(line, account.currency));
+    }
+    return lines;
+  }
+
+  private async eventLinesForEntryInTransaction(
+    tx: any,
+    tenantId: string,
+    entry: JournalEntry,
+  ): Promise<LedgerJournalPostedPayload['lines']> {
+    const lines: LedgerJournalPostedPayload['lines'] = [];
+    for (const line of entry.entries || []) {
+      const [account] = await tx.$queryRaw<any[]>`
+        SELECT "currency" FROM "ledger_accounts"
+        WHERE "tenantId" = ${tenantId} AND "accountCode" = ${line.account_code}
+      `;
       if (!account) {
         throw new Error(`Account ${line.account_code} not found for tenant ${tenantId}`);
       }
