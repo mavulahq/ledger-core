@@ -10,6 +10,7 @@ import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { AccountsController } from './controllers/accounts.controller';
 import { ProductsController } from './controllers/products.controller';
+import { ProjectionsController } from './controllers/projections.controller';
 import { RulesController } from './controllers/rules.controller';
 import { SchemasController } from './controllers/schemas.controller';
 import { WorkflowsController } from './controllers/workflows.controller';
@@ -27,6 +28,7 @@ import { FengineStoreService } from './services/fengine-store.service';
 import { LedgerService } from './ledger/ledger.service';
 import { LoanService } from './loans/loan.service';
 import { ProductConfigService } from './products/product-config.service';
+import { ReadProjectionService } from './read-models/read-projection.service';
 import { RulesEngineService } from './rules-engine/rules-engine.service';
 import { SchemaManagerService } from './schema-manager/schema-manager.service';
 import { TransactionService } from './transactions/transaction.service';
@@ -40,6 +42,7 @@ import { WorkerQueueService } from './worker/worker-queue.service';
     AppController,
     AccountsController,
     ProductsController,
+    ProjectionsController,
     RulesController,
     SchemasController,
     WorkflowsController,
@@ -54,6 +57,7 @@ import { WorkerQueueService } from './worker/worker-queue.service';
     FengineStoreService,
     AuditTrailService,
     ProductConfigService,
+    ReadProjectionService,
     RulesEngineService,
     LedgerService,
     TransactionService,

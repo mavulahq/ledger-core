@@ -1,6 +1,7 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { DomainEventEnvelope } from '../domain-events/domain-event.types';
 import { DomainInboxService } from '../domain-events/domain-inbox.service';
+import { ReadProjectionService } from '../read-models/read-projection.service';
 import { SchemaManagerService } from '../schema-manager/schema-manager.service';
 import { AuditTrailService } from '../services/audit-trail.service';
 import { EngineEventCallback } from './worker.types';
@@ -13,6 +14,7 @@ export class EngineEventService {
     private readonly schemas: SchemaManagerService,
     private readonly auditTrail: AuditTrailService,
     @Optional() private readonly inbox?: DomainInboxService,
+    @Optional() private readonly projections?: ReadProjectionService,
   ) {}
 
   async handle(event: EngineEventCallback) {
@@ -71,6 +73,9 @@ export class EngineEventService {
     }
 
     try {
+      if (this.projections) {
+        await this.projections.apply(event);
+      }
       const context = {
         ...(event.payload || {}),
         job_id: jobId,
