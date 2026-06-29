@@ -16,6 +16,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE;
 
+ALTER TABLE IF EXISTS public.projection_checkpoints
+  ALTER COLUMN "lagMs" TYPE bigint USING "lagMs"::bigint;
+
 ALTER TABLE public.accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tenant_configs ENABLE ROW LEVEL SECURITY;

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { DomainEventEnvelope } from '../domain-events/domain-event.types';
+import { DomainEventEnvelope, assertDomainEventEnvelope } from '../domain-events/domain-event.types';
 import { DomainInboxService } from '../domain-events/domain-inbox.service';
 import { DomainOutboxService } from '../domain-events/domain-outbox.service';
 import { PrismaService } from '../services/prisma.service';
@@ -24,10 +24,11 @@ type ProjectionTarget = {
 
 type ProjectionEventEntry = {
   event_id: string;
-  event_type: string;
-  event_version: number;
-  aggregate_version: number;
+  event_type?: string;
+  event_version?: number;
+  aggregate_version?: number;
   occurred_at: string;
+  [key: string]: any;
 };
 
 @Injectable()
@@ -43,6 +44,7 @@ export class ReadProjectionService {
   ) {}
 
   async apply(event: DomainEventEnvelope): Promise<ProjectionApplyResult> {
+    assertDomainEventEnvelope(event);
     const target = this.targetFor(event);
     if (!target) {
       return { applied: false, ignored: true };
@@ -226,7 +228,7 @@ export class ReadProjectionService {
         };
       });
     } catch (error) {
-      await this.inbox.markFailed(event.tenant_id, event.event_id, CONSUMER_NAME, error as Error);
+      await this.inbox.recordFailed(event.tenant_id, event.event_id, CONSUMER_NAME, error as Error);
       throw error;
     }
   }
@@ -237,7 +239,7 @@ export class ReadProjectionService {
     const record = this.buildRecord(event, target, existing);
     this.memory.set(this.key(event.tenant_id, target.projectionName, target.entityId), record);
     if (!alreadyProjected) {
-      this.updateMemoryCheckpoint(event, target.projectionName, new Date(event.occurred_at), new Date());
+      this.updateMemoryCheckpoint(record, new Date());
     }
   }
 
@@ -280,7 +282,7 @@ export class ReadProjectionService {
         "updatedAt" = now()
     `;
     if (!alreadyProjected) {
-      await this.upsertCheckpoint(tx, event, target.projectionName, new Date(event.occurred_at));
+      await this.upsertCheckpoint(tx, record);
     }
   }
 
@@ -468,22 +470,20 @@ export class ReadProjectionService {
   }
 
   private updateMemoryCheckpoint(
-    event: DomainEventEnvelope,
-    projectionName: ReadProjectionName,
-    occurredAt: Date,
+    record: ReadProjectionRecord,
     now: Date,
   ): void {
-    const key = this.checkpointKey(event.tenant_id, projectionName);
+    const key = this.checkpointKey(record.tenant_id, record.projection_name);
     const existing = this.checkpoints.get(key);
     this.checkpoints.set(key, {
-      tenant_id: event.tenant_id,
-      projection_name: projectionName,
-      last_event_id: event.event_id,
-      last_event_type: event.event_type,
-      last_event_version: event.event_version,
-      last_occurred_at: occurredAt,
+      tenant_id: record.tenant_id,
+      projection_name: record.projection_name,
+      last_event_id: record.last_event_id,
+      last_event_type: record.last_event_type,
+      last_event_version: record.last_event_version,
+      last_occurred_at: record.last_occurred_at,
       event_count: (existing?.event_count || 0) + 1,
-      lag_ms: this.lagMs(occurredAt),
+      lag_ms: this.lagMs(record.last_occurred_at),
       created_at: existing?.created_at || now,
       updated_at: now,
     });
@@ -491,9 +491,7 @@ export class ReadProjectionService {
 
   private async upsertCheckpoint(
     tx: any,
-    event: DomainEventEnvelope,
-    projectionName: ReadProjectionName,
-    occurredAt: Date,
+    record: ReadProjectionRecord,
   ): Promise<void> {
     await tx.$executeRaw`
       INSERT INTO "projection_checkpoints" (
@@ -501,8 +499,8 @@ export class ReadProjectionService {
         "lastEventVersion", "lastOccurredAt", "eventCount", "lagMs", "updatedAt"
       )
       VALUES (
-        ${randomUUID()}, ${event.tenant_id}, ${projectionName}, ${event.event_id}, ${event.event_type},
-        ${event.event_version}, ${occurredAt}, 1, ${this.lagMs(occurredAt)}, now()
+        ${randomUUID()}, ${record.tenant_id}, ${record.projection_name}, ${record.last_event_id}, ${record.last_event_type},
+        ${record.last_event_version}, ${record.last_occurred_at}, 1, ${this.lagMs(record.last_occurred_at)}, now()
       )
       ON CONFLICT ("tenantId", "projectionName") DO UPDATE SET
         "lastEventId" = EXCLUDED."lastEventId",
@@ -563,9 +561,11 @@ export class ReadProjectionService {
     existing: T[],
     next: T,
   ): T[] {
-    const entries = Array.isArray(existing) ? [...existing] : [];
+    const entries = Array.isArray(existing)
+      ? existing.map((entry) => this.normalizeProjectionEntry(entry))
+      : [];
     if (!entries.some((entry) => entry.event_id === next.event_id)) {
-      entries.push(next);
+      entries.push(this.normalizeProjectionEntry(next));
     }
     return entries.sort((left, right) => this.compareProjectionEvents(left, right));
   }
@@ -584,9 +584,32 @@ export class ReadProjectionService {
       event_id: data.latest_event_id || event.event_id,
       event_type: data.latest_event_type || event.event_type,
       event_version: data.latest_event_version || event.event_version,
-      aggregate_version: event.aggregate.version,
+      aggregate_version: this.aggregateVersion(data) || event.aggregate.version,
       occurred_at: data.latest_occurred_at || event.occurred_at,
     };
+  }
+
+  private normalizeProjectionEntry<T extends ProjectionEventEntry>(entry: T): T {
+    return {
+      ...entry,
+      event_version: this.positiveInteger(entry.event_version) || 1,
+      aggregate_version: this.aggregateVersion(entry),
+      occurred_at: entry.occurred_at || '1970-01-01T00:00:00.000Z',
+    };
+  }
+
+  private aggregateVersion(entry: Record<string, any>): number {
+    return (
+      this.positiveInteger(entry.aggregate_version) ||
+      this.positiveInteger(entry.configuration_version) ||
+      this.positiveInteger(entry.latest_version) ||
+      this.positiveInteger(entry.event_version) ||
+      0
+    );
+  }
+
+  private positiveInteger(value: any): number | undefined {
+    return Number.isInteger(value) && value > 0 ? value : undefined;
   }
 
   private hasProjectedEvent(data: Record<string, any> | undefined, eventId: string): boolean {
@@ -604,14 +627,20 @@ export class ReadProjectionService {
     left: ProjectionEventEntry,
     right: ProjectionEventEntry,
   ): number {
-    if (left.aggregate_version !== right.aggregate_version) {
-      return left.aggregate_version - right.aggregate_version;
+    const leftAggregateVersion = this.aggregateVersion(left);
+    const rightAggregateVersion = this.aggregateVersion(right);
+    if (
+      leftAggregateVersion > 0 &&
+      rightAggregateVersion > 0 &&
+      leftAggregateVersion !== rightAggregateVersion
+    ) {
+      return leftAggregateVersion - rightAggregateVersion;
     }
     const byTime = Date.parse(left.occurred_at) - Date.parse(right.occurred_at);
     if (byTime !== 0) {
       return byTime;
     }
-    return left.event_id.localeCompare(right.event_id);
+    return 0;
   }
 
   private lagMs(occurredAt: Date): number {

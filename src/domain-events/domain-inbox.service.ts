@@ -93,6 +93,48 @@ export class DomainInboxService {
     );
   }
 
+  async recordFailed(
+    tenantId: string,
+    eventId: string,
+    consumerName: string,
+    error: Error,
+  ): Promise<void> {
+    const message = error.message.slice(0, 2000);
+    const key = this.key(eventId, consumerName);
+    if (!this.prisma.isConfigured) {
+      const now = new Date();
+      const existing = this.memory.get(key);
+      this.memory.set(key, {
+        event_id: eventId,
+        consumer_name: consumerName,
+        tenant_id: tenantId,
+        status: 'FAILED',
+        processed_at: existing?.processed_at,
+        failed_at: now,
+        last_error: message,
+        created_at: existing?.created_at || now,
+        updated_at: now,
+      });
+      return;
+    }
+
+    await this.enterTenant(tenantId);
+    await this.prisma.db.$executeRaw`
+      INSERT INTO "domain_inbox_events" (
+        "id", "eventId", "consumerName", "tenantId", "status", "failedAt", "lastError", "updatedAt"
+      )
+      VALUES (
+        ${randomUUID()}, ${eventId}, ${consumerName}, ${tenantId}, 'FAILED', now(), ${message}, now()
+      )
+      ON CONFLICT ("eventId", "consumerName") DO UPDATE SET
+        "status" = 'FAILED',
+        "processedAt" = NULL,
+        "failedAt" = now(),
+        "lastError" = EXCLUDED."lastError",
+        "updatedAt" = now()
+    `;
+  }
+
   async reset(tenantId: string, eventId: string, consumerName: string): Promise<void> {
     const key = this.key(eventId, consumerName);
     if (!this.prisma.isConfigured) {

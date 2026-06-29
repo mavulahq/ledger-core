@@ -230,6 +230,67 @@ describe('read projections', () => {
         ],
       }),
     });
+    await expect(service.status(tenantId)).resolves.toMatchObject({
+      projections: [
+        expect.objectContaining({
+          projection_name: 'product_publication',
+          last_event_id: later.event_id,
+        }),
+      ],
+    });
+  });
+
+  it('keeps latest state when legacy projection history has no aggregate version', async () => {
+    const productId = 'prod_projection_legacy';
+    const existing = {
+      tenant_id: tenantId,
+      projection_name: 'product_publication',
+      entity_id: productId,
+      entity_type: 'product_configuration',
+      data: {
+        product_id: productId,
+        product_type: ProductType.LOAN,
+        name: 'Legacy Product v2',
+        enabled: false,
+        latest_version: 2,
+        publications: [
+          {
+            event_id: 'evt_11111111-1111-4111-8111-111111111111',
+            occurred_at: '2026-01-02T00:00:00.000Z',
+            configuration_version: 2,
+            enabled: false,
+            name: 'Legacy Product v2',
+            product_type: ProductType.LOAN,
+          },
+        ],
+      },
+      last_event_id: 'evt_11111111-1111-4111-8111-111111111111',
+      last_event_type: 'products.configuration_published',
+      last_event_version: 1,
+      last_occurred_at: new Date('2026-01-02T00:00:00.000Z'),
+      created_at: new Date('2026-01-02T00:00:00.000Z'),
+      updated_at: new Date('2026-01-02T00:00:00.000Z'),
+    };
+    (service as any).memory.set(`${tenantId}:product_publication:${productId}`, existing);
+    const older = factory.productsConfigurationPublished({
+      tenantId,
+      product: product(productId, 1, 'Legacy Product v1', true),
+      occurredAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    await service.apply(older);
+
+    await expect(service.get(tenantId, 'product_publication', productId)).resolves.toMatchObject({
+      data: expect.objectContaining({
+        latest_version: 2,
+        name: 'Legacy Product v2',
+        enabled: false,
+        publications: [
+          expect.objectContaining({ configuration_version: 1 }),
+          expect.objectContaining({ configuration_version: 2 }),
+        ],
+      }),
+    });
   });
 
   it('rebuilds without duplicating later event delivery', async () => {
@@ -255,10 +316,69 @@ describe('read projections', () => {
   it('includes projection tables in tenant isolation policies', () => {
     const rls = readFileSync('migrations/rls_setup.sql', 'utf8');
 
+    expect(rls).toContain('ALTER COLUMN "lagMs" TYPE bigint');
     expect(rls).toContain('ALTER TABLE public.read_projections ENABLE ROW LEVEL SECURITY');
     expect(rls).toContain('ALTER TABLE public.projection_checkpoints ENABLE ROW LEVEL SECURITY');
     expect(rls).toContain('tenant_isolation_read_projections');
     expect(rls).toContain('tenant_isolation_projection_checkpoints');
+  });
+
+  it('rejects malformed envelopes before projection processing', async () => {
+    const event = factory.loanDisbursed({
+      tenantId,
+      loan: approvedLoan(),
+      transactionId: 'disburse_loan_bad_envelope',
+      currency: 'MZN',
+    });
+
+    await expect(service.apply({ ...event, event_id: 'invalid_event_id' })).rejects.toThrow(
+      'domain event event_id must use evt_<uuid>',
+    );
+  });
+
+  it('persists a failed inbox record after database projection rollback', async () => {
+    const event = factory.loanDisbursed({
+      tenantId,
+      loan: approvedLoan(),
+      transactionId: 'disburse_loan_db_failure',
+      currency: 'MZN',
+    });
+    const tx = {
+      $executeRaw: jest.fn().mockResolvedValue(undefined),
+      $queryRaw: jest.fn()
+        .mockResolvedValueOnce([
+          {
+            eventId: event.event_id,
+            consumerName: 'fengine.read-models',
+            tenantId,
+            status: 'PROCESSING',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ])
+        .mockRejectedValueOnce(new Error('projection select failed')),
+    };
+    const prisma = {
+      isConfigured: true,
+      ensureTenant: jest.fn().mockResolvedValue(undefined),
+      setTenantContext: jest.fn().mockResolvedValue(undefined),
+      db: {
+        $transaction: jest.fn(async (callback) => callback(tx)),
+        $executeRaw: jest.fn().mockResolvedValue(undefined),
+      },
+    } as any;
+    const databaseService = new ReadProjectionService(
+      prisma,
+      new DomainInboxService(prisma),
+      new DomainOutboxService(prisma),
+    );
+
+    await expect(databaseService.apply(event)).rejects.toThrow('projection select failed');
+    expect(
+      prisma.db.$executeRaw.mock.calls.some((call) =>
+        String(call[0]).includes('INSERT INTO "domain_inbox_events"'),
+      ),
+    ).toBe(true);
   });
 
   it('ignores unsupported events', async () => {
