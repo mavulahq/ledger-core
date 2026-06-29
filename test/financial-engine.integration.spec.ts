@@ -6,7 +6,7 @@
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { LoanService, LoanType, LoanStatus } from '../src/loans/loan.service';
+import { Loan, LoanService, LoanType, LoanStatus } from '../src/loans/loan.service';
 import {
   TransactionService,
   TransactionType,
@@ -19,7 +19,9 @@ import { PrismaService } from '../src/services/prisma.service';
 import { AuditTrailService } from '../src/services/audit-trail.service';
 import { FengineStoreService } from '../src/services/fengine-store.service';
 import { DomainEventFactory } from '../src/domain-events/domain-event-factory.service';
+import { DomainInboxService } from '../src/domain-events/domain-inbox.service';
 import { DomainOutboxService } from '../src/domain-events/domain-outbox.service';
+import { ReadProjectionService } from '../src/read-models/read-projection.service';
 
 describe('Financial engine loan lifecycle integration', () => {
   let loanService: LoanService;
@@ -28,6 +30,8 @@ describe('Financial engine loan lifecycle integration', () => {
   let ledgerService: LedgerService;
   let productConfigService: ProductConfigService;
   let outboxService: DomainOutboxService;
+  let readProjections: ReadProjectionService;
+  let domainEvents: DomainEventFactory;
 
   const tenantId = 'test_inst_001';
   const customerId = 'cust_001';
@@ -45,7 +49,9 @@ describe('Financial engine loan lifecycle integration', () => {
         FengineStoreService,
         AuditTrailService,
         DomainEventFactory,
+        DomainInboxService,
         DomainOutboxService,
+        ReadProjectionService,
         {
           provide: PrismaService,
           useValue: {
@@ -61,6 +67,8 @@ describe('Financial engine loan lifecycle integration', () => {
     ledgerService = module.get<LedgerService>(LedgerService);
     productConfigService = module.get<ProductConfigService>(ProductConfigService);
     outboxService = module.get<DomainOutboxService>(DomainOutboxService);
+    readProjections = module.get<ReadProjectionService>(ReadProjectionService);
+    domainEvents = module.get<DomainEventFactory>(DomainEventFactory);
   });
 
   it('creates a pending loan application', async () => {
@@ -238,6 +246,92 @@ describe('Financial engine loan lifecycle integration', () => {
         event.envelope.aggregate.id === entryId,
     );
     expect(events).toHaveLength(0);
+  });
+
+  it('projects active domain events into read models', async () => {
+    await ledgerService.initializeChartOfAccounts(tenantId);
+    const product = await productConfigService.createOrUpdateProduct(tenantId, ProductType.LOAN, {
+      product_id: `prod_projection_${Date.now()}`,
+      name: 'Projection Loan',
+      enabled: true,
+    });
+    const entryId = `je_projection_${Date.now()}`;
+    const entry = await ledgerService.postJournalEntry(tenantId, {
+      entry_id: entryId,
+      entry_date: new Date(),
+      transaction_id: `txn_projection_${Date.now()}`,
+      description: 'Projection journal posting',
+      posted_by: 'SYSTEM',
+      posting_date: new Date(),
+      entries: [
+        { account_code: '10010', debit_amount: 1000 },
+        { account_code: '11100', credit_amount: 1000 },
+      ],
+      status: 'DRAFT',
+      metadata: {},
+    });
+    const loan = projectionLoan(product.product_id);
+    await outboxService.append(
+      domainEvents.loanDisbursed({
+        tenantId,
+        loan,
+        transactionId: `txn_projection_disburse_${Date.now()}`,
+        currency: 'MZN',
+        aggregateVersion: 1,
+      }),
+    );
+    await outboxService.append(
+      domainEvents.lendingPaymentPosted({
+        tenantId,
+        loan: { ...loan, version: 2, total_paid_principal: 2000, remaining_balance: 23000 },
+        transactionId: `txn_projection_payment_${Date.now()}`,
+        sourceAccountId: `CUST_${customerId}`,
+        paymentAmount: 2500,
+        currency: 'MZN',
+        allocation: {
+          principal_payment: 2000,
+          interest_payment: 400,
+          fee_payment: 100,
+          balance_after: 23000,
+        },
+        aggregateVersion: 2,
+      }),
+    );
+
+    const activeEvents = (await outboxService.list(tenantId)).filter((record) =>
+      [
+        'products.configuration_published',
+        'ledger.journal_posted',
+        'lending.loan_disbursed',
+        'lending.payment_posted',
+      ].includes(record.envelope.event_type),
+    );
+    for (const record of activeEvents) {
+      await readProjections.apply(record.envelope);
+    }
+
+    await expect(readProjections.get(tenantId, 'product_publication', product.product_id))
+      .resolves.toMatchObject({
+        data: expect.objectContaining({ latest_version: product.version }),
+      });
+    await expect(readProjections.get(tenantId, 'ledger_activity', entry.entry_id))
+      .resolves.toMatchObject({
+        data: expect.objectContaining({ transaction_id: entry.transaction_id }),
+      });
+    await expect(readProjections.get(tenantId, 'loan_activity', loan.id))
+      .resolves.toMatchObject({
+        data: expect.objectContaining({
+          latest_transaction_id: expect.any(String),
+          activity_count: expect.any(Number),
+        }),
+      });
+    await expect(readProjections.status(tenantId)).resolves.toMatchObject({
+      projections: expect.arrayContaining([
+        expect.objectContaining({ projection_name: 'loan_activity' }),
+        expect.objectContaining({ projection_name: 'ledger_activity' }),
+        expect.objectContaining({ projection_name: 'product_publication' }),
+      ]),
+    });
   });
 
   it('evaluates lending eligibility rules', async () => {
@@ -551,6 +645,43 @@ describe('Financial engine loan lifecycle integration', () => {
   });
 
 });
+
+function projectionLoan(productId: string): Loan {
+  const now = new Date();
+  return {
+    id: `loan_projection_${Date.now()}`,
+    version: 1,
+    tenant_id: 'test_inst_001',
+    customer_id: 'cust_001',
+    product_id: productId,
+    loan_type: LoanType.PERSONAL,
+    principal_amount: 25000,
+    approved_amount: 25000,
+    disbursed_amount: 25000,
+    term_months: 12,
+    monthly_rate: 0.015,
+    annual_rate: 18,
+    interest_method: 'SIMPLE',
+    origination_fee_percent: 2,
+    origination_fee_amount: 500,
+    late_payment_fee_percent: 5,
+    monthly_payment: 2291.67,
+    total_interest: 2500,
+    total_repayable: 27500,
+    grace_months: 0,
+    status: LoanStatus.ACTIVE,
+    application_date: now,
+    approval_date: now,
+    disbursement_date: now,
+    maturity_date: now,
+    total_paid_principal: 0,
+    total_paid_interest: 0,
+    total_paid_fees: 0,
+    remaining_balance: 25000,
+    created_at: now,
+    updated_at: now,
+  };
+}
 
 function countLoanEvents(events: any[], loanId: string, eventType: string): number {
   return events.filter(

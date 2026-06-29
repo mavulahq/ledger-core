@@ -6,6 +6,7 @@ import { AuthController } from '../src/auth/auth.controller';
 import { MetricsService } from '../src/metrics/metrics.service';
 import { AccountsController } from '../src/controllers/accounts.controller';
 import { ProductsController } from '../src/controllers/products.controller';
+import { ProjectionsController } from '../src/controllers/projections.controller';
 import { RulesController } from '../src/controllers/rules.controller';
 import { SchemasController } from '../src/controllers/schemas.controller';
 import { WorkflowsController } from '../src/controllers/workflows.controller';
@@ -21,6 +22,7 @@ describe('fengine - Integration Tests (app composition)', () => {
   let metricsService: MetricsService;
   let accountsController: AccountsController;
   let productsController: ProductsController;
+  let projectionsController: ProjectionsController;
   let rulesController: RulesController;
   let rulesEngine: RulesEngineService;
   let schemasController: SchemasController;
@@ -41,6 +43,7 @@ describe('fengine - Integration Tests (app composition)', () => {
     metricsService = app.get(MetricsService);
     accountsController = app.get(AccountsController);
     productsController = app.get(ProductsController);
+    projectionsController = app.get(ProjectionsController);
     rulesController = app.get(RulesController);
     rulesEngine = app.get(RulesEngineService);
     schemasController = app.get(SchemasController);
@@ -216,6 +219,15 @@ describe('fengine - Integration Tests (app composition)', () => {
       const unsafeRule = results.find((item) => item.rule_id === 'rule_api_unsafe_runtime');
       expect(unsafeRule?.passed).toBe(false);
       expect(unsafeRule?.actions).toEqual([]);
+    });
+  });
+
+  describe('Read Projections API', () => {
+    it('exposes projection status for tenant', async () => {
+      await expect(projectionsController.status({ tenantId })).resolves.toMatchObject({
+        status: 'ok',
+        projections: expect.any(Array),
+      });
     });
   });
 

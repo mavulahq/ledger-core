@@ -38,6 +38,8 @@ model Tenant {
   auditTrail     AuditTrailEvent[]
   domainOutbox   DomainOutboxEvent[]
   domainInbox    DomainInboxEvent[]
+  readProjections ReadProjection[]
+  projectionCheckpoints ProjectionCheckpoint[]
 
   @@map("tenants")
 }
@@ -266,4 +268,45 @@ model DomainInboxEvent {
   @@index([tenantId, status])
   @@index([tenantId, eventId])
   @@map("domain_inbox_events")
+}
+
+model ReadProjection {
+  id               String   @id @default(cuid())
+  tenantId         String
+  projectionName   String
+  entityId         String
+  entityType       String
+  data             Json
+  lastEventId      String
+  lastEventType    String
+  lastEventVersion Int
+  lastOccurredAt   DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, projectionName, entityId])
+  @@index([tenantId, projectionName])
+  @@index([tenantId, entityType, entityId])
+  @@index([lastEventType, lastEventVersion])
+  @@map("read_projections")
+}
+
+model ProjectionCheckpoint {
+  id               String   @id @default(cuid())
+  tenantId         String
+  projectionName   String
+  lastEventId      String?
+  lastEventType    String?
+  lastEventVersion Int?
+  lastOccurredAt   DateTime?
+  eventCount       Int      @default(0)
+  lagMs            Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, projectionName])
+  @@index([tenantId])
+  @@map("projection_checkpoints")
 }

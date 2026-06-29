@@ -1,5 +1,6 @@
 import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Post, UseGuards } from '@nestjs/common';
 import { DomainOutboxPublisherService } from '../domain-events/domain-outbox-publisher.service';
+import { ReadProjectionService } from '../read-models/read-projection.service';
 import { EngineEventService } from '../worker/engine-event.service';
 import { InternalApiKeyGuard } from '../worker/internal-api-key.guard';
 import { WorkerQueueService } from '../worker/worker-queue.service';
@@ -12,6 +13,7 @@ export class InternalWorkerController {
     private readonly queue: WorkerQueueService,
     private readonly events: EngineEventService,
     private readonly outboxPublisher: DomainOutboxPublisherService,
+    private readonly projections: ReadProjectionService,
   ) {}
 
   @Post('jobs')
@@ -53,6 +55,22 @@ export class InternalWorkerController {
       throw new BadRequestException('limit must be a positive integer');
     }
     return this.outboxPublisher.publishPending(limit);
+  }
+
+  @Post('projections/rebuild')
+  rebuildProjections(@Body() body: { tenant_id?: string; projection_name?: string } = {}) {
+    let projectionName;
+    try {
+      projectionName = body.projection_name
+        ? this.projections.projectionName(body.projection_name)
+        : undefined;
+    } catch (error) {
+      throw new BadRequestException((error as Error).message);
+    }
+    return this.projections.rebuild({
+      tenantId: body.tenant_id,
+      projectionName,
+    });
   }
 
   private validateEvent(body: { tenant_id?: string; event_type?: string; max_attempts?: number }) {
