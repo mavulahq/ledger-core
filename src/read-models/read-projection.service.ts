@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { DomainEventEnvelope } from '../domain-events/domain-event.types';
+import { randomUUID } from 'crypto';
+import { DomainEventEnvelope, assertDomainEventEnvelope } from '../domain-events/domain-event.types';
 import { DomainInboxService } from '../domain-events/domain-inbox.service';
 import { DomainOutboxService } from '../domain-events/domain-outbox.service';
 import { PrismaService } from '../services/prisma.service';
@@ -15,10 +16,26 @@ import {
 
 const CONSUMER_NAME = 'fengine.read-models';
 
+type ProjectionTarget = {
+  projectionName: ReadProjectionName;
+  entityId: string;
+  entityType: string;
+};
+
+type ProjectionEventEntry = {
+  event_id: string;
+  event_type?: string;
+  event_version?: number;
+  aggregate_version?: number;
+  occurred_at: string;
+  [key: string]: any;
+};
+
 @Injectable()
 export class ReadProjectionService {
   private readonly memory = new Map<string, ReadProjectionRecord>();
   private readonly checkpoints = new Map<string, ProjectionCheckpoint>();
+  private readonly memoryLocks = new Map<string, Promise<void>>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -27,33 +44,17 @@ export class ReadProjectionService {
   ) {}
 
   async apply(event: DomainEventEnvelope): Promise<ProjectionApplyResult> {
+    assertDomainEventEnvelope(event);
     const target = this.targetFor(event);
     if (!target) {
       return { applied: false, ignored: true };
     }
 
-    const processing = await this.inbox.startProcessing(event, CONSUMER_NAME);
-    if (!processing.started) {
-      return {
-        applied: false,
-        idempotent: true,
-        projection_name: target.projectionName,
-        entity_id: target.entityId,
-      };
+    if (!this.prisma.isConfigured) {
+      return this.applyMemory(event, target);
     }
 
-    try {
-      await this.project(event, target.projectionName, target.entityId, target.entityType);
-      await this.inbox.markProcessed(event.tenant_id, event.event_id, CONSUMER_NAME);
-      return {
-        applied: true,
-        projection_name: target.projectionName,
-        entity_id: target.entityId,
-      };
-    } catch (error) {
-      await this.inbox.markFailed(event.tenant_id, event.event_id, CONSUMER_NAME, error as Error);
-      throw error;
-    }
+    return this.applyDatabase(event, target);
   }
 
   async rebuild(input: {
@@ -63,30 +64,28 @@ export class ReadProjectionService {
     const projectionNames = input.projectionName ? [input.projectionName] : [...READ_PROJECTION_NAMES];
     await this.clear(input.tenantId, projectionNames);
 
-    const records = await this.outbox.list(input.tenantId);
-    let scanned = 0;
-    let rebuilt = 0;
-    for (const record of records.sort(
-      (left, right) =>
-        Date.parse(left.envelope.occurred_at) - Date.parse(right.envelope.occurred_at),
-    )) {
-      const target = this.targetFor(record.envelope);
-      if (!target || !projectionNames.includes(target.projectionName)) {
-        continue;
-      }
-      scanned += 1;
-      await this.project(
-        record.envelope,
-        target.projectionName,
-        target.entityId,
-        target.entityType,
+    const records = (await this.outbox.list(input.tenantId))
+      .filter((record) => {
+        const target = this.targetFor(record.envelope);
+        return target && projectionNames.includes(target.projectionName);
+      })
+      .sort(
+        (left, right) =>
+          Date.parse(left.envelope.occurred_at) - Date.parse(right.envelope.occurred_at),
       );
-      rebuilt += 1;
+
+    let rebuilt = 0;
+    for (const record of records) {
+      await this.inbox.reset(record.envelope.tenant_id, record.envelope.event_id, CONSUMER_NAME);
+      const result = await this.apply(record.envelope);
+      if (result.applied) {
+        rebuilt += 1;
+      }
     }
 
     return {
       rebuilt,
-      scanned,
+      scanned: records.length,
       projection_names: projectionNames,
       tenant_id: input.tenantId,
     };
@@ -171,59 +170,143 @@ export class ReadProjectionService {
     return value;
   }
 
-  private async project(
+  private async applyMemory(
     event: DomainEventEnvelope,
-    projectionName: ReadProjectionName,
-    entityId: string,
-    entityType: string,
+    target: ProjectionTarget,
+  ): Promise<ProjectionApplyResult> {
+    return this.withMemoryLock(this.key(event.tenant_id, target.projectionName, target.entityId), async () => {
+      const processing = await this.inbox.startProcessing(event, CONSUMER_NAME);
+      if (!processing.started) {
+        return {
+          applied: false,
+          idempotent: true,
+          projection_name: target.projectionName,
+          entity_id: target.entityId,
+        };
+      }
+
+      try {
+        this.projectMemory(event, target);
+        await this.inbox.markProcessed(event.tenant_id, event.event_id, CONSUMER_NAME);
+        return {
+          applied: true,
+          projection_name: target.projectionName,
+          entity_id: target.entityId,
+        };
+      } catch (error) {
+        await this.inbox.markFailed(event.tenant_id, event.event_id, CONSUMER_NAME, error as Error);
+        throw error;
+      }
+    });
+  }
+
+  private async applyDatabase(
+    event: DomainEventEnvelope,
+    target: ProjectionTarget,
+  ): Promise<ProjectionApplyResult> {
+    await this.prisma.ensureTenant(event.tenant_id);
+
+    try {
+      return await this.prisma.db.$transaction(async (tx: any) => {
+        await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${event.tenant_id}, true)`;
+        const processing = await this.startInboxProcessing(tx, event);
+        if (!processing.started) {
+          return {
+            applied: false,
+            idempotent: true,
+            projection_name: target.projectionName,
+            entity_id: target.entityId,
+          };
+        }
+
+        await this.projectDatabase(tx, event, target);
+        await this.markInboxProcessed(tx, event);
+        return {
+          applied: true,
+          projection_name: target.projectionName,
+          entity_id: target.entityId,
+        };
+      });
+    } catch (error) {
+      await this.inbox.recordFailed(event.tenant_id, event.event_id, CONSUMER_NAME, error as Error);
+      throw error;
+    }
+  }
+
+  private projectMemory(event: DomainEventEnvelope, target: ProjectionTarget): void {
+    const existing = this.memory.get(this.key(event.tenant_id, target.projectionName, target.entityId));
+    const alreadyProjected = this.hasProjectedEvent(existing?.data, event.event_id);
+    const record = this.buildRecord(event, target, existing);
+    this.memory.set(this.key(event.tenant_id, target.projectionName, target.entityId), record);
+    if (!alreadyProjected) {
+      this.updateMemoryCheckpoint(record, new Date());
+    }
+  }
+
+  private async projectDatabase(
+    tx: any,
+    event: DomainEventEnvelope,
+    target: ProjectionTarget,
   ): Promise<void> {
-    const existing = await this.get(event.tenant_id, projectionName, entityId);
+    const lockKey = this.key(event.tenant_id, target.projectionName, target.entityId);
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey})::bigint)`;
+
+    const [row] = await tx.$queryRaw<any[]>`
+      SELECT * FROM "read_projections"
+      WHERE "tenantId" = ${event.tenant_id}
+        AND "projectionName" = ${target.projectionName}
+        AND "entityId" = ${target.entityId}
+      LIMIT 1
+      FOR UPDATE
+    `;
+    const existing = row ? this.projectionFromRow(row) : undefined;
+    const alreadyProjected = this.hasProjectedEvent(existing?.data, event.event_id);
+    const record = this.buildRecord(event, target, existing);
+
+    await tx.$executeRaw`
+      INSERT INTO "read_projections" (
+        "id", "tenantId", "projectionName", "entityId", "entityType", "data",
+        "lastEventId", "lastEventType", "lastEventVersion", "lastOccurredAt", "updatedAt"
+      )
+      VALUES (
+        ${randomUUID()}, ${record.tenant_id}, ${record.projection_name}, ${record.entity_id}, ${record.entity_type}, CAST(${this.json(record.data)} AS jsonb),
+        ${record.last_event_id}, ${record.last_event_type}, ${record.last_event_version}, ${record.last_occurred_at}, now()
+      )
+      ON CONFLICT ("tenantId", "projectionName", "entityId") DO UPDATE SET
+        "entityType" = EXCLUDED."entityType",
+        "data" = EXCLUDED."data",
+        "lastEventId" = EXCLUDED."lastEventId",
+        "lastEventType" = EXCLUDED."lastEventType",
+        "lastEventVersion" = EXCLUDED."lastEventVersion",
+        "lastOccurredAt" = EXCLUDED."lastOccurredAt",
+        "updatedAt" = now()
+    `;
+    if (!alreadyProjected) {
+      await this.upsertCheckpoint(tx, record);
+    }
+  }
+
+  private buildRecord(
+    event: DomainEventEnvelope,
+    target: ProjectionTarget,
+    existing?: ReadProjectionRecord,
+  ): ReadProjectionRecord {
     const data = this.projectData(event, existing?.data || {});
+    const metadata = this.projectionMetadata(event, data);
     const now = new Date();
-    const occurredAt = new Date(event.occurred_at);
-    const record: ReadProjectionRecord = {
+    return {
       tenant_id: event.tenant_id,
-      projection_name: projectionName,
-      entity_id: entityId,
-      entity_type: entityType,
+      projection_name: target.projectionName,
+      entity_id: target.entityId,
+      entity_type: target.entityType,
       data,
-      last_event_id: event.event_id,
-      last_event_type: event.event_type,
-      last_event_version: event.event_version,
-      last_occurred_at: occurredAt,
+      last_event_id: metadata.event_id,
+      last_event_type: metadata.event_type,
+      last_event_version: metadata.event_version,
+      last_occurred_at: new Date(metadata.occurred_at),
       created_at: existing?.created_at || now,
       updated_at: now,
     };
-
-    if (!this.prisma.isConfigured) {
-      this.memory.set(this.key(event.tenant_id, projectionName, entityId), record);
-      this.updateMemoryCheckpoint(event, projectionName, occurredAt, now);
-      return;
-    }
-
-    await this.enterTenant(event.tenant_id);
-    await this.prisma.db.$transaction(async (tx: any) => {
-      await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${event.tenant_id}, true)`;
-      await tx.$executeRaw`
-        INSERT INTO "read_projections" (
-          "tenantId", "projectionName", "entityId", "entityType", "data",
-          "lastEventId", "lastEventType", "lastEventVersion", "lastOccurredAt", "updatedAt"
-        )
-        VALUES (
-          ${record.tenant_id}, ${record.projection_name}, ${record.entity_id}, ${record.entity_type}, CAST(${this.json(record.data)} AS jsonb),
-          ${record.last_event_id}, ${record.last_event_type}, ${record.last_event_version}, ${record.last_occurred_at}, now()
-        )
-        ON CONFLICT ("tenantId", "projectionName", "entityId") DO UPDATE SET
-          "entityType" = EXCLUDED."entityType",
-          "data" = EXCLUDED."data",
-          "lastEventId" = EXCLUDED."lastEventId",
-          "lastEventType" = EXCLUDED."lastEventType",
-          "lastEventVersion" = EXCLUDED."lastEventVersion",
-          "lastOccurredAt" = EXCLUDED."lastOccurredAt",
-          "updatedAt" = now()
-      `;
-      await this.upsertCheckpoint(tx, event, projectionName, occurredAt);
-    });
   }
 
   private projectData(event: DomainEventEnvelope, existing: Record<string, any>): Record<string, any> {
@@ -240,27 +323,46 @@ export class ReadProjectionService {
           line_count: event.payload.line_count,
           totals: event.payload.totals,
           lines: event.payload.lines,
+          latest_event_id: event.event_id,
+          latest_event_type: event.event_type,
+          latest_event_version: event.event_version,
+          latest_occurred_at: event.occurred_at,
         };
       case 'products.configuration_published':
-        return {
-          product_id: event.payload.product_id,
-          product_type: event.payload.product_type,
-          name: event.payload.name,
-          enabled: event.payload.enabled,
-          latest_version: event.payload.configuration_version,
-          publications: [
-            ...(existing.publications || []),
-            {
-              event_id: event.event_id,
-              occurred_at: event.occurred_at,
-              configuration_version: event.payload.configuration_version,
-              enabled: event.payload.enabled,
-            },
-          ],
-        };
+        return this.productPublication(event, existing);
       default:
         return existing;
     }
+  }
+
+  private productPublication(
+    event: DomainEventEnvelope,
+    existing: Record<string, any>,
+  ): Record<string, any> {
+    const publications = this.appendUnique(existing.publications || [], {
+      event_id: event.event_id,
+      event_type: event.event_type,
+      event_version: event.event_version,
+      aggregate_version: event.aggregate.version,
+      occurred_at: event.occurred_at,
+      product_type: event.payload.product_type,
+      name: event.payload.name,
+      configuration_version: event.payload.configuration_version,
+      enabled: event.payload.enabled,
+    });
+    const latest = publications[publications.length - 1];
+    return {
+      product_id: event.payload.product_id,
+      product_type: latest.product_type,
+      name: latest.name,
+      enabled: latest.enabled,
+      latest_version: latest.configuration_version,
+      latest_event_id: latest.event_id,
+      latest_event_type: latest.event_type,
+      latest_event_version: latest.event_version,
+      latest_occurred_at: latest.occurred_at,
+      publications,
+    };
   }
 
   private loanActivity(
@@ -268,38 +370,39 @@ export class ReadProjectionService {
     existing: Record<string, any>,
     activityType: string,
   ): Record<string, any> {
-    const activities = [
-      ...(existing.activities || []),
-      {
-        event_id: event.event_id,
-        event_type: event.event_type,
-        occurred_at: event.occurred_at,
-        transaction_id: event.payload.transaction_id,
-        activity_type: activityType,
-        money: event.payload.money,
-        allocation: event.payload.allocation,
-        balance_after: event.payload.balance_after,
-      },
-    ];
+    const activities = this.appendUnique(existing.activities || [], {
+      event_id: event.event_id,
+      event_type: event.event_type,
+      event_version: event.event_version,
+      aggregate_version: event.aggregate.version,
+      occurred_at: event.occurred_at,
+      transaction_id: event.payload.transaction_id,
+      activity_type: activityType,
+      money: event.payload.money,
+      allocation: event.payload.allocation,
+      balance_after: event.payload.balance_after,
+    });
+    const latest = activities[activities.length - 1];
+    const disbursement = [...activities]
+      .reverse()
+      .find((activity) => activity.event_type === 'lending.loan_disbursed');
     return {
       loan_id: event.aggregate.id,
-      latest_activity_type: activityType,
-      latest_transaction_id: event.payload.transaction_id,
-      currency: event.payload.money?.currency || existing.currency,
-      disbursed_amount: event.event_type === 'lending.loan_disbursed'
-        ? event.payload.money?.amount
-        : existing.disbursed_amount,
-      balance_after: event.payload.balance_after || existing.balance_after || event.payload.money?.amount,
+      latest_activity_type: latest.activity_type,
+      latest_transaction_id: latest.transaction_id,
+      latest_event_id: latest.event_id,
+      latest_event_type: latest.event_type,
+      latest_event_version: latest.event_version,
+      latest_occurred_at: latest.occurred_at,
+      currency: latest.money?.currency || existing.currency,
+      disbursed_amount: disbursement?.money?.amount || existing.disbursed_amount,
+      balance_after: latest.balance_after || existing.balance_after || latest.money?.amount,
       activity_count: activities.length,
       activities,
     };
   }
 
-  private targetFor(event: DomainEventEnvelope): {
-    projectionName: ReadProjectionName;
-    entityId: string;
-    entityType: string;
-  } | undefined {
+  private targetFor(event: DomainEventEnvelope): ProjectionTarget | undefined {
     switch (event.event_type) {
       case 'lending.loan_disbursed':
       case 'lending.payment_posted':
@@ -367,22 +470,20 @@ export class ReadProjectionService {
   }
 
   private updateMemoryCheckpoint(
-    event: DomainEventEnvelope,
-    projectionName: ReadProjectionName,
-    occurredAt: Date,
+    record: ReadProjectionRecord,
     now: Date,
   ): void {
-    const key = this.checkpointKey(event.tenant_id, projectionName);
+    const key = this.checkpointKey(record.tenant_id, record.projection_name);
     const existing = this.checkpoints.get(key);
     this.checkpoints.set(key, {
-      tenant_id: event.tenant_id,
-      projection_name: projectionName,
-      last_event_id: event.event_id,
-      last_event_type: event.event_type,
-      last_event_version: event.event_version,
-      last_occurred_at: occurredAt,
+      tenant_id: record.tenant_id,
+      projection_name: record.projection_name,
+      last_event_id: record.last_event_id,
+      last_event_type: record.last_event_type,
+      last_event_version: record.last_event_version,
+      last_occurred_at: record.last_occurred_at,
       event_count: (existing?.event_count || 0) + 1,
-      lag_ms: this.lagMs(occurredAt),
+      lag_ms: this.lagMs(record.last_occurred_at),
       created_at: existing?.created_at || now,
       updated_at: now,
     });
@@ -390,18 +491,16 @@ export class ReadProjectionService {
 
   private async upsertCheckpoint(
     tx: any,
-    event: DomainEventEnvelope,
-    projectionName: ReadProjectionName,
-    occurredAt: Date,
+    record: ReadProjectionRecord,
   ): Promise<void> {
     await tx.$executeRaw`
       INSERT INTO "projection_checkpoints" (
-        "tenantId", "projectionName", "lastEventId", "lastEventType",
+        "id", "tenantId", "projectionName", "lastEventId", "lastEventType",
         "lastEventVersion", "lastOccurredAt", "eventCount", "lagMs", "updatedAt"
       )
       VALUES (
-        ${event.tenant_id}, ${projectionName}, ${event.event_id}, ${event.event_type},
-        ${event.event_version}, ${occurredAt}, 1, ${this.lagMs(occurredAt)}, now()
+        ${randomUUID()}, ${record.tenant_id}, ${record.projection_name}, ${record.last_event_id}, ${record.last_event_type},
+        ${record.last_event_version}, ${record.last_occurred_at}, 1, ${this.lagMs(record.last_occurred_at)}, now()
       )
       ON CONFLICT ("tenantId", "projectionName") DO UPDATE SET
         "lastEventId" = EXCLUDED."lastEventId",
@@ -414,8 +513,161 @@ export class ReadProjectionService {
     `;
   }
 
+  private async startInboxProcessing(
+    tx: any,
+    event: DomainEventEnvelope,
+  ): Promise<{ started: boolean }> {
+    const [inserted] = await tx.$queryRaw<any[]>`
+      INSERT INTO "domain_inbox_events" ("id", "eventId", "consumerName", "tenantId", "status", "updatedAt")
+      VALUES (${randomUUID()}, ${event.event_id}, ${CONSUMER_NAME}, ${event.tenant_id}, 'PROCESSING', now())
+      ON CONFLICT ("eventId", "consumerName") DO NOTHING
+      RETURNING *
+    `;
+    if (inserted) {
+      return { started: true };
+    }
+
+    const staleBefore = new Date(Date.now() - this.processingLeaseMs());
+    const [claimed] = await tx.$queryRaw<any[]>`
+      UPDATE "domain_inbox_events"
+      SET "status" = 'PROCESSING', "lastError" = NULL, "updatedAt" = now()
+      WHERE "eventId" = ${event.event_id}
+        AND "consumerName" = ${CONSUMER_NAME}
+        AND (
+          "status" = 'FAILED'
+          OR ("status" = 'PROCESSING' AND "updatedAt" <= ${staleBefore})
+        )
+      RETURNING *
+    `;
+    return { started: Boolean(claimed) };
+  }
+
+  private async markInboxProcessed(tx: any, event: DomainEventEnvelope): Promise<void> {
+    await tx.$executeRaw`
+      UPDATE "domain_inbox_events"
+      SET
+        "status" = 'PROCESSED',
+        "processedAt" = now(),
+        "failedAt" = NULL,
+        "lastError" = NULL,
+        "updatedAt" = now()
+      WHERE "eventId" = ${event.event_id}
+        AND "consumerName" = ${CONSUMER_NAME}
+        AND "tenantId" = ${event.tenant_id}
+    `;
+  }
+
+  private appendUnique<T extends ProjectionEventEntry>(
+    existing: T[],
+    next: T,
+  ): T[] {
+    const entries = Array.isArray(existing)
+      ? existing.map((entry) => this.normalizeProjectionEntry(entry))
+      : [];
+    if (!entries.some((entry) => entry.event_id === next.event_id)) {
+      entries.push(this.normalizeProjectionEntry(next));
+    }
+    return entries.sort((left, right) => this.compareProjectionEvents(left, right));
+  }
+
+  private projectionMetadata(
+    event: DomainEventEnvelope,
+    data: Record<string, any>,
+  ): ProjectionEventEntry {
+    const latest =
+      data.activities?.[data.activities.length - 1] ||
+      data.publications?.[data.publications.length - 1];
+    if (latest) {
+      return latest;
+    }
+    return {
+      event_id: data.latest_event_id || event.event_id,
+      event_type: data.latest_event_type || event.event_type,
+      event_version: data.latest_event_version || event.event_version,
+      aggregate_version: this.aggregateVersion(data) || event.aggregate.version,
+      occurred_at: data.latest_occurred_at || event.occurred_at,
+    };
+  }
+
+  private normalizeProjectionEntry<T extends ProjectionEventEntry>(entry: T): T {
+    return {
+      ...entry,
+      event_version: this.positiveInteger(entry.event_version) || 1,
+      aggregate_version: this.aggregateVersion(entry),
+      occurred_at: entry.occurred_at || '1970-01-01T00:00:00.000Z',
+    };
+  }
+
+  private aggregateVersion(entry: Record<string, any>): number {
+    return (
+      this.positiveInteger(entry.aggregate_version) ||
+      this.positiveInteger(entry.configuration_version) ||
+      this.positiveInteger(entry.latest_version) ||
+      this.positiveInteger(entry.event_version) ||
+      0
+    );
+  }
+
+  private positiveInteger(value: any): number | undefined {
+    return Number.isInteger(value) && value > 0 ? value : undefined;
+  }
+
+  private hasProjectedEvent(data: Record<string, any> | undefined, eventId: string): boolean {
+    if (!data) {
+      return false;
+    }
+    return (
+      data.latest_event_id === eventId ||
+      Boolean(data.activities?.some((entry: ProjectionEventEntry) => entry.event_id === eventId)) ||
+      Boolean(data.publications?.some((entry: ProjectionEventEntry) => entry.event_id === eventId))
+    );
+  }
+
+  private compareProjectionEvents(
+    left: ProjectionEventEntry,
+    right: ProjectionEventEntry,
+  ): number {
+    const leftAggregateVersion = this.aggregateVersion(left);
+    const rightAggregateVersion = this.aggregateVersion(right);
+    if (
+      leftAggregateVersion > 0 &&
+      rightAggregateVersion > 0 &&
+      leftAggregateVersion !== rightAggregateVersion
+    ) {
+      return leftAggregateVersion - rightAggregateVersion;
+    }
+    const byTime = Date.parse(left.occurred_at) - Date.parse(right.occurred_at);
+    if (byTime !== 0) {
+      return byTime;
+    }
+    return 0;
+  }
+
   private lagMs(occurredAt: Date): number {
     return Math.max(0, Date.now() - occurredAt.getTime());
+  }
+
+  private processingLeaseMs(): number {
+    return Number(process.env.FENGINE_INBOX_PROCESSING_LEASE_MS || 300000);
+  }
+
+  private async withMemoryLock<T>(lockKey: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.memoryLocks.get(lockKey) || Promise.resolve();
+    let release: () => void = () => undefined;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const chain = previous.then(() => current);
+    this.memoryLocks.set(lockKey, chain);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.memoryLocks.get(lockKey) === chain) {
+        this.memoryLocks.delete(lockKey);
+      }
+    }
   }
 
   private async enterTenant(tenantId: string): Promise<void> {
@@ -456,7 +708,7 @@ export class ReadProjectionService {
       last_event_version: row.lastEventVersion || undefined,
       last_occurred_at: row.lastOccurredAt ? new Date(row.lastOccurredAt) : undefined,
       event_count: row.eventCount,
-      lag_ms: row.lagMs,
+      lag_ms: Number(row.lagMs),
       created_at: new Date(row.createdAt),
       updated_at: new Date(row.updatedAt),
     };
