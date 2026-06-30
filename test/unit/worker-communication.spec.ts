@@ -222,6 +222,52 @@ describe('fengine worker communication', () => {
     expect(schemas.executeWorkflow).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps payment settlement events outside active financial processing', async () => {
+    const schemas = {
+      getWorkflowsByTrigger: jest.fn().mockResolvedValue([]),
+      executeWorkflow: jest.fn(),
+    };
+    const audit = { record: jest.fn() };
+    const inbox = new DomainInboxService({ isConfigured: false } as any);
+    const projections = {
+      apply: jest.fn().mockResolvedValue({ applied: false, ignored: true }),
+    };
+    const service = new EngineEventService(schemas as any, audit as any, inbox, projections as any);
+    const event = {
+      event_id: 'evt_7e2edbbb-9ea6-4d7d-85f0-098594d79e9b',
+      event_type: 'payments.settlement_completed',
+      event_version: 1,
+      occurred_at: '2026-06-30T10:00:00.000Z',
+      tenant_id: 'tenant_001',
+      aggregate: { type: 'settlement', id: 'settlement_001', version: 1 },
+      correlation_id: 'corr_payment_settlement_001',
+      causation_id: 'cmd_7e2edbbb-9ea6-4d7d-85f0-098594d79e9b',
+      idempotency_key: 'idem_7e2edbbb-9ea6-4d7d-85f0-098594d79e9b',
+      payload: {
+        settlement_id: 'settlement_001',
+        provider_reference: 'mpesa_ref_001',
+        money: { amount: '150.00', currency: 'MZN' },
+      },
+      metadata: {
+        producer: 'fpay',
+        data_classification: 'restricted',
+        schema_uri: 'contracts/domain-events/event-envelope.schema.json',
+      },
+    };
+
+    await expect(service.handleDomainEvent(event as any, 'job_settlement_001')).resolves.toMatchObject({
+      accepted: true,
+      event_type: 'payments.settlement_completed',
+      executed_workflows: 0,
+    });
+    expect(projections.apply).toHaveBeenCalledWith(event);
+    expect(schemas.executeWorkflow).not.toHaveBeenCalled();
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'domain_event.processed',
+      entity_id: 'evt_7e2edbbb-9ea6-4d7d-85f0-098594d79e9b',
+    }));
+  });
+
   it('does not let an expired outbox publisher complete a reclaimed record', async () => {
     const outbox = new DomainOutboxService({ isConfigured: false } as any);
     const event = new DomainEventFactory().loanDisbursed({
