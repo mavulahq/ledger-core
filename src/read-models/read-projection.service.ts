@@ -578,19 +578,27 @@ export class ReadProjectionService {
       data.activities?.[data.activities.length - 1] ||
       data.publications?.[data.publications.length - 1];
     if (latest) {
+      const eventId = latest.event_id || data.latest_event_id;
+      const eventType =
+        latest.event_type ||
+        this.projectionEventType(latest) ||
+        data.latest_event_type;
+      const occurredAt = latest.occurred_at || data.latest_occurred_at;
+      if (!eventId || !eventType || !occurredAt) {
+        throw new Error('Cannot resolve projection metadata for legacy history entry');
+      }
       return {
         ...latest,
-        event_id: latest.event_id || data.latest_event_id || event.event_id,
-        event_type: latest.event_type || data.latest_event_type || event.event_type,
+        event_id: eventId,
+        event_type: eventType,
         event_version:
           this.positiveInteger(latest.event_version) ||
           this.positiveInteger(data.latest_event_version) ||
-          event.event_version,
+          1,
         aggregate_version:
           this.aggregateVersion(latest) ||
-          this.aggregateVersion(data) ||
-          event.aggregate.version,
-        occurred_at: latest.occurred_at || data.latest_occurred_at || event.occurred_at,
+          this.aggregateVersion(data),
+        occurred_at: occurredAt,
       };
     }
     return {
@@ -605,10 +613,24 @@ export class ReadProjectionService {
   private normalizeProjectionEntry<T extends ProjectionEventEntry>(entry: T): T {
     return {
       ...entry,
+      event_type: entry.event_type || this.projectionEventType(entry),
       event_version: this.positiveInteger(entry.event_version) || 1,
       aggregate_version: this.aggregateVersion(entry),
       occurred_at: entry.occurred_at || '1970-01-01T00:00:00.000Z',
     };
+  }
+
+  private projectionEventType(entry: ProjectionEventEntry): string | undefined {
+    if (entry.activity_type === 'DISBURSED') {
+      return 'lending.loan_disbursed';
+    }
+    if (entry.activity_type === 'PAYMENT_POSTED') {
+      return 'lending.payment_posted';
+    }
+    if (entry.configuration_version !== undefined) {
+      return 'products.configuration_published';
+    }
+    return undefined;
   }
 
   private aggregateVersion(entry: Record<string, any>): number {
