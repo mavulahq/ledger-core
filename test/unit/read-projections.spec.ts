@@ -281,6 +281,9 @@ describe('read projections', () => {
     await service.apply(older);
 
     await expect(service.get(tenantId, 'product_publication', productId)).resolves.toMatchObject({
+      last_event_id: 'evt_11111111-1111-4111-8111-111111111111',
+      last_event_type: 'products.configuration_published',
+      last_event_version: 1,
       data: expect.objectContaining({
         latest_version: 2,
         name: 'Legacy Product v2',
