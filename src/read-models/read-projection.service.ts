@@ -578,7 +578,20 @@ export class ReadProjectionService {
       data.activities?.[data.activities.length - 1] ||
       data.publications?.[data.publications.length - 1];
     if (latest) {
-      return latest;
+      return {
+        ...latest,
+        event_id: latest.event_id || data.latest_event_id || event.event_id,
+        event_type: latest.event_type || data.latest_event_type || event.event_type,
+        event_version:
+          this.positiveInteger(latest.event_version) ||
+          this.positiveInteger(data.latest_event_version) ||
+          event.event_version,
+        aggregate_version:
+          this.aggregateVersion(latest) ||
+          this.aggregateVersion(data) ||
+          event.aggregate.version,
+        occurred_at: latest.occurred_at || data.latest_occurred_at || event.occurred_at,
+      };
     }
     return {
       event_id: data.latest_event_id || event.event_id,
