@@ -296,6 +296,74 @@ describe('read projections', () => {
     });
   });
 
+  it('infers latest legacy loan activity metadata without incoming event fallback', async () => {
+    const loan = approvedLoan();
+    const paymentEventId = 'evt_22222222-2222-4222-8222-222222222222';
+    const existing = {
+      tenant_id: tenantId,
+      projection_name: 'loan_activity',
+      entity_id: loan.id,
+      entity_type: 'loan',
+      data: {
+        loan_id: loan.id,
+        latest_activity_type: 'PAYMENT_POSTED',
+        latest_transaction_id: 'payment_loan_legacy',
+        currency: 'MZN',
+        balance_after: '23000.00',
+        activity_count: 1,
+        activities: [
+          {
+            event_id: paymentEventId,
+            occurred_at: '2026-01-02T00:00:00.000Z',
+            transaction_id: 'payment_loan_legacy',
+            activity_type: 'PAYMENT_POSTED',
+            money: { amount: '2000.00', currency: 'MZN' },
+            allocation: { principal: '2000.00', interest: '0.00', fees: '0.00' },
+            balance_after: '23000.00',
+          },
+        ],
+      },
+      last_event_id: paymentEventId,
+      last_event_type: 'lending.payment_posted',
+      last_event_version: 1,
+      last_occurred_at: new Date('2026-01-02T00:00:00.000Z'),
+      created_at: new Date('2026-01-02T00:00:00.000Z'),
+      updated_at: new Date('2026-01-02T00:00:00.000Z'),
+    };
+    (service as any).memory.set(`${tenantId}:loan_activity:${loan.id}`, existing);
+    const older = factory.loanDisbursed({
+      tenantId,
+      loan,
+      transactionId: 'disburse_loan_legacy',
+      currency: 'MZN',
+      occurredAt: new Date('2026-01-01T00:00:00.000Z'),
+      aggregateVersion: 1,
+    });
+
+    await service.apply(older);
+
+    await expect(service.get(tenantId, 'loan_activity', loan.id)).resolves.toMatchObject({
+      last_event_id: paymentEventId,
+      last_event_type: 'lending.payment_posted',
+      last_event_version: 1,
+      data: expect.objectContaining({
+        latest_event_id: paymentEventId,
+        latest_event_type: 'lending.payment_posted',
+        latest_transaction_id: 'payment_loan_legacy',
+        balance_after: '23000.00',
+      }),
+    });
+    await expect(service.status(tenantId)).resolves.toMatchObject({
+      projections: [
+        expect.objectContaining({
+          projection_name: 'loan_activity',
+          last_event_id: paymentEventId,
+          last_event_type: 'lending.payment_posted',
+        }),
+      ],
+    });
+  });
+
   it('rebuilds without duplicating later event delivery', async () => {
     const event = factory.loanDisbursed({
       tenantId,
