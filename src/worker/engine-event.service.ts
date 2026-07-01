@@ -6,6 +6,8 @@ import { SchemaManagerService } from '../schema-manager/schema-manager.service';
 import { AuditTrailService } from '../services/audit-trail.service';
 import { EngineEventCallback } from './worker.types';
 
+const INACTIVE_WORKFLOW_TRIGGERS = new Set(['payments.settlement_completed']);
+
 @Injectable()
 export class EngineEventService {
   private readonly completed = new Map<string, any>();
@@ -115,6 +117,10 @@ export class EngineEventService {
   }
 
   private async executeWorkflows(tenantId: string, trigger: string, context: Record<string, any>) {
+    if (INACTIVE_WORKFLOW_TRIGGERS.has(trigger)) {
+      return [];
+    }
+
     const workflows = await this.schemas.getWorkflowsByTrigger(tenantId, trigger);
     const executions = [];
     for (const workflow of workflows) {
