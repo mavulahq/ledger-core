@@ -245,8 +245,12 @@ describe('fengine worker communication', () => {
       idempotency_key: 'idem_7e2edbbb-9ea6-4d7d-85f0-098594d79e9b',
       payload: {
         settlement_id: 'settlement_001',
+        payment_process_id: 'settlement_001',
         provider_reference: 'mpesa_ref_001',
+        rail: 'mpesa',
         money: { amount: '150.00', currency: 'MZN' },
+        settled_at: '2026-06-30T10:00:00.000Z',
+        reconciliation_status: 'MATCHED',
       },
       metadata: {
         producer: 'fpay',
