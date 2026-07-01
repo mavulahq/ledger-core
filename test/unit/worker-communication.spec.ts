@@ -224,7 +224,7 @@ describe('fengine worker communication', () => {
 
   it('keeps payment settlement events outside active financial processing', async () => {
     const schemas = {
-      getWorkflowsByTrigger: jest.fn().mockResolvedValue([]),
+      getWorkflowsByTrigger: jest.fn().mockResolvedValue([{ workflow_id: 'wf_settlement_001' }]),
       executeWorkflow: jest.fn(),
     };
     const audit = { record: jest.fn() };
@@ -261,6 +261,7 @@ describe('fengine worker communication', () => {
       executed_workflows: 0,
     });
     expect(projections.apply).toHaveBeenCalledWith(event);
+    expect(schemas.getWorkflowsByTrigger).not.toHaveBeenCalled();
     expect(schemas.executeWorkflow).not.toHaveBeenCalled();
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
       action: 'domain_event.processed',
