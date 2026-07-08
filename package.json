@@ -1,9 +1,10 @@
 {
-  "name": "@getfluxo/fengine",
+  "name": "@mavula/ledger-core",
   "version": "0.1.0",
   "private": true,
-  "author": "EstandarMustaq <estandarmustaq@getfluxo.io>",
-  "license": "SEE LICENSE IN LICENSE",
+  "description": "MAVULA Ledger Core - financial source of truth for ledger, lending and product configuration.",
+  "author": "EstandarMustaq <estandarmustaq@mavula.io>",
+  "license": "AGPL-3.0-only",
   "main": "dist/main.js",
   "scripts": {
     "prebuild": "prisma generate",

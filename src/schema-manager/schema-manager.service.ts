@@ -1,8 +1,8 @@
 /*
- * getfluxo.io - Dynamic Schema Manager (No-Code Configuration)
- * Copyright (c) 2025 getfluxo.io
+ * mavula.io - Dynamic Schema Manager (No-Code Configuration)
+ * Copyright (c) 2025 mavula.io
  * 
- * Author: EstandarMustaq <estandarmustaq@getfluxo.io>
+ * Author: EstandarMustaq <estandarmustaq@mavula.io>
  * License: Proprietary - See LICENSE file
  * 
  * Tenant institutions can define custom fields, workflows, and validations

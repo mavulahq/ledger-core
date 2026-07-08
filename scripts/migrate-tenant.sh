@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# getfluxo.io - Schema Migration Tooling & Tenant Provisioning
-# Copyright (c) 2026 getfluxo.io
-# License: PROPRIETARY
+# mavula.io - Schema Migration Tooling & Tenant Provisioning
+# Copyright (c) 2026 mavula.io
+# SPDX-License-Identifier: AGPL-3.0-only
 
 set -euo pipefail
 
@@ -166,7 +166,7 @@ case "$ACTION" in
     ;;
   help|*)
     cat << HELP
-getfluxo.io Migration Tooling
+mavula.io Migration Tooling
 
 Usage: $0 <action> [tenant_id]
 

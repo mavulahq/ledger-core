@@ -1,8 +1,8 @@
 /*
- * getfluxo.io - Loan Management & Origination Engine
- * Copyright (c) 2025 getfluxo.io
+ * mavula.io - Loan Management & Origination Engine
+ * Copyright (c) 2025 mavula.io
  *
- * Author: EstandarMustaq <estandarmustaq@getfluxo.io>
+ * Author: EstandarMustaq <estandarmustaq@mavula.io>
  * License: Proprietary - See LICENSE file
  *
  * Complete loan lifecycle: origination, validation, disbursement, payments, closures

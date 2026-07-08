@@ -1,4 +1,4 @@
--- getfluxo.io fengine tenant isolation baseline.
+-- mavula.io fengine tenant isolation baseline.
 -- Run after Prisma creates the shared-schema tables.
 -- Runtime code must set app.current_tenant_id on each DB transaction/session.
 

@@ -1,8 +1,8 @@
 /*
- * getfluxo.io - Product Configuration & Auto-Creation Engine
- * Copyright (c) 2025 getfluxo.io
+ * mavula.io - Product Configuration & Auto-Creation Engine
+ * Copyright (c) 2025 mavula.io
  *
- * Author: EstandarMustaq <estandarmustaq@getfluxo.io>
+ * Author: EstandarMustaq <estandarmustaq@mavula.io>
  * License: Proprietary - See LICENSE file
  *
  * Auto-configurable financial products (CHECKING, SAVINGS, LOAN, CREDIT_LINE)

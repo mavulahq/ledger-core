@@ -5,7 +5,7 @@ export interface DomainEventAggregate {
 }
 
 export interface DomainEventMetadata {
-  producer: 'fengine' | 'fwk' | 'fpay';
+  producer: 'ledger-core' | 'workbench' | 'settlements' | 'fengine' | 'fwk' | 'fpay';
   data_classification: 'public' | 'internal' | 'confidential' | 'restricted';
   trace_id?: string;
   schema_uri?: string;

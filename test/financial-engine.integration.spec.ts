@@ -1,6 +1,6 @@
 /*
- * getfluxo.io - Financial Engine Integration Test
- * Copyright (c) 2025 getfluxo.io
+ * mavula.io - Financial Engine Integration Test
+ * Copyright (c) 2025 mavula.io
  *
  * Test: loan lifecycle integration across products, rules, calculations, ledger, transactions, and loans.
  */
@@ -121,7 +121,7 @@ describe('Financial engine loan lifecycle integration', () => {
         configuration_version: 1,
       },
       metadata: {
-        producer: 'fengine',
+        producer: 'ledger-core',
         data_classification: 'internal',
       },
     });
@@ -213,7 +213,7 @@ describe('Financial engine loan lifecycle integration', () => {
         ],
       },
       metadata: {
-        producer: 'fengine',
+        producer: 'ledger-core',
         data_classification: 'restricted',
       },
     });
