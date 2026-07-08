@@ -2,7 +2,7 @@
  * getfluxo.io - Financial Calculations Engine
  * Copyright (c) 2025 getfluxo.io
  * 
- * Author: EstandarMustaq <estandarmustaq@getfluxo.io>
+ * Author: EstandarMustaq <estandarmustaq@mavula.io>
  * License: Proprietary - See LICENSE file
  * 
  * Core financial calculations: PMT, interest, amortization, compound interest

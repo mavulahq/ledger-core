@@ -2,7 +2,7 @@
  * getfluxo.io - General Ledger & Chart of Accounts Engine
  * Copyright (c) 2025 getfluxo.io
  * 
- * Author: EstandarMustaq <estandarmustaq@getfluxo.io>
+ * Author: EstandarMustaq <estandarmustaq@mavula.io>
  * License: Proprietary - See LICENSE file
  * 
  * Double-entry bookkeeping: GL, COA, journal entries, trial balance

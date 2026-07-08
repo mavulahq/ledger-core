@@ -30,9 +30,9 @@ describe('fengine worker communication', () => {
     });
 
     expect(first).toMatchObject({
-      id: 'fengine-loan-approved-001',
+      id: 'ledger-core-loan-approved-001',
       queue: 'platform',
-      type: 'FENGINE_EVENT',
+      type: 'LEDGER_CORE_EVENT',
       status: 'QUEUED',
       payload: { loan_id: 'loan_001', event_type: 'LOAN_APPROVED' },
     });
@@ -89,9 +89,9 @@ describe('fengine worker communication', () => {
       failed: 0,
     });
 
-    const queued = await queue.get(`fengine-${disbursementEvent.event_id}`);
+    const queued = await queue.get(`ledger-core-${disbursementEvent.event_id}`);
     expect(queued).toMatchObject({
-      type: 'FENGINE_EVENT',
+      type: 'LEDGER_CORE_EVENT',
       tenant_id: 'tenant_001',
       payload: {
         domain_event: true,
@@ -107,7 +107,7 @@ describe('fengine worker communication', () => {
       published: 1,
       failed: 0,
     });
-    const paymentQueued = await queue.get(`fengine-${paymentEvent.event_id}`);
+    const paymentQueued = await queue.get(`ledger-core-${paymentEvent.event_id}`);
     expect(paymentQueued).toMatchObject({
       payload: {
         domain_event: true,
@@ -124,7 +124,7 @@ describe('fengine worker communication', () => {
       published: 1,
       failed: 0,
     });
-    const productQueued = await queue.get(`fengine-${productEvent.event_id}`);
+    const productQueued = await queue.get(`ledger-core-${productEvent.event_id}`);
     expect(productQueued).toMatchObject({
       payload: {
         domain_event: true,
@@ -141,7 +141,7 @@ describe('fengine worker communication', () => {
       published: 1,
       failed: 0,
     });
-    const journalQueued = await queue.get(`fengine-${journalEvent.event_id}`);
+    const journalQueued = await queue.get(`ledger-core-${journalEvent.event_id}`);
     expect(journalQueued).toMatchObject({
       payload: {
         domain_event: true,
@@ -253,7 +253,7 @@ describe('fengine worker communication', () => {
         reconciliation_status: 'MATCHED',
       },
       metadata: {
-        producer: 'fpay',
+        producer: 'settlements',
         data_classification: 'restricted',
         schema_uri: 'contracts/domain-events/event-envelope.schema.json',
       },
@@ -287,7 +287,7 @@ describe('fengine worker communication', () => {
     const [claimed] = await outbox.claimPending(1);
     (outbox as any).memory.set(event.event_id, {
       ...claimed,
-      locked_by: 'fengine-outbox-new-owner',
+      locked_by: 'ledger-core-outbox-new-owner',
     });
 
     await outbox.markPublished(claimed);
@@ -295,7 +295,7 @@ describe('fengine worker communication', () => {
     await expect(outbox.list('tenant_001')).resolves.toEqual([
       expect.objectContaining({
         status: 'PUBLISHING',
-        locked_by: 'fengine-outbox-new-owner',
+        locked_by: 'ledger-core-outbox-new-owner',
       }),
     ]);
   });

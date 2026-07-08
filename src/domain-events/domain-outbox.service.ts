@@ -12,7 +12,7 @@ import {
 @Injectable()
 export class DomainOutboxService {
   private readonly memory = new Map<string, DomainOutboxRecord>();
-  private readonly workerId = `fengine-outbox-${hostname()}-${process.pid}-${randomUUID()}`;
+  private readonly workerId = `ledger-core-outbox-${hostname()}-${process.pid}-${randomUUID()}`;
 
   constructor(private readonly prisma: PrismaService) {}
 

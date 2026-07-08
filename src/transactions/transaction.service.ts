@@ -2,7 +2,7 @@
  * getfluxo.io - Transaction Processing & Payment Settlement Engine
  * Copyright (c) 2025 getfluxo.io
  * 
- * Author: EstandarMustaq <estandarmustaq@getfluxo.io>
+ * Author: EstandarMustaq <estandarmustaq@mavula.io>
  * License: Proprietary - See LICENSE file
  * 
  * Real-time transaction processing, settlement, reconciliation

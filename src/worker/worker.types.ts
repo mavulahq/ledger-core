@@ -13,7 +13,7 @@ export interface EnqueueEngineEventInput {
 export interface EngineWorkerJob {
   id: string;
   queue: 'platform';
-  type: 'FENGINE_EVENT';
+  type: 'LEDGER_CORE_EVENT';
   tenant_id: string;
   payload: Record<string, any> & { event_type: string };
   status: WorkerJobStatus;

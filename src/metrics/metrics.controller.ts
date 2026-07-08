@@ -1,7 +1,7 @@
 /*
  * getfluxo.io - Core Finance Engine
  * Copyright (c) 2026 getfluxo.io
- * License: PROPRIETARY
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 import { Controller, Get, Res } from '@nestjs/common';

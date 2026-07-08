@@ -50,7 +50,7 @@ export class DomainEventFactory {
         lines: input.lines,
       },
       metadata: {
-        producer: 'fengine',
+        producer: 'ledger-core',
         data_classification: 'restricted',
         schema_uri: 'contracts/domain-events/event-envelope.schema.json',
       },
@@ -95,7 +95,7 @@ export class DomainEventFactory {
         },
       },
       metadata: {
-        producer: 'fengine',
+        producer: 'ledger-core',
         data_classification: 'restricted',
         schema_uri: 'contracts/domain-events/event-envelope.schema.json',
       },
@@ -153,7 +153,7 @@ export class DomainEventFactory {
         balance_after: Math.max(input.allocation.balance_after, 0).toFixed(2),
       },
       metadata: {
-        producer: 'fengine',
+        producer: 'ledger-core',
         data_classification: 'restricted',
         schema_uri: 'contracts/domain-events/event-envelope.schema.json',
       },
@@ -194,7 +194,7 @@ export class DomainEventFactory {
         configuration_version: this.productAggregateVersion(input.product),
       },
       metadata: {
-        producer: 'fengine',
+        producer: 'ledger-core',
         data_classification: 'internal',
         schema_uri: 'contracts/domain-events/event-envelope.schema.json',
       },

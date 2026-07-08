@@ -21,7 +21,7 @@ export class WorkerQueueService implements OnModuleDestroy {
     const job: EngineWorkerJob = {
       id,
       queue: 'platform',
-      type: 'FENGINE_EVENT',
+      type: 'LEDGER_CORE_EVENT',
       tenant_id: input.tenant_id,
       payload: { ...(input.payload || {}), event_type: input.event_type },
       status: 'QUEUED',
@@ -41,7 +41,7 @@ export class WorkerQueueService implements OnModuleDestroy {
       attempts: job.max_attempts,
       backoff: {
         type: 'exponential',
-        delay: Number(process.env.FENGINE_WORKER_BACKOFF_MS || 5000),
+        delay: Number(process.env.LEDGER_CORE_WORKER_BACKOFF_MS || process.env.FENGINE_WORKER_BACKOFF_MS || 5000),
       },
       removeOnComplete: false,
       removeOnFail: false,
@@ -76,7 +76,11 @@ export class WorkerQueueService implements OnModuleDestroy {
   }
 
   private usesMemory(): boolean {
-    return process.env.FENGINE_QUEUE_BACKEND === 'memory' || process.env.NODE_ENV === 'test';
+    return (
+      process.env.LEDGER_CORE_QUEUE_BACKEND === 'memory' ||
+      process.env.FENGINE_QUEUE_BACKEND === 'memory' ||
+      process.env.NODE_ENV === 'test'
+    );
   }
 
   private redisConnection() {
@@ -92,12 +96,12 @@ export class WorkerQueueService implements OnModuleDestroy {
 
   private jobId(idempotencyKey?: string): string {
     if (!idempotencyKey) {
-      return `fengine-${randomUUID()}`;
+      return `ledger-core-${randomUUID()}`;
     }
     if (!/^[a-zA-Z0-9_-]{1,100}$/.test(idempotencyKey)) {
       throw new Error('idempotency_key must use letters, numbers, underscore, or dash');
     }
-    return `fengine-${idempotencyKey}`;
+    return `ledger-core-${idempotencyKey}`;
   }
 
   private async fromBullJob(job: Job): Promise<EngineWorkerJob> {

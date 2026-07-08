@@ -46,7 +46,7 @@ describe('Fengine (e2e)', () => {
 
     const created = await internalWorkerController.enqueue(payload);
     expect(created).toMatchObject({
-      id: 'fengine-e2e-loan-approved',
+      id: 'ledger-core-e2e-loan-approved',
       status: 'QUEUED',
     });
 

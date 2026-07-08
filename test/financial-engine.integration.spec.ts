@@ -121,7 +121,7 @@ describe('Financial engine loan lifecycle integration', () => {
         configuration_version: 1,
       },
       metadata: {
-        producer: 'fengine',
+        producer: 'ledger-core',
         data_classification: 'internal',
       },
     });
@@ -213,7 +213,7 @@ describe('Financial engine loan lifecycle integration', () => {
         ],
       },
       metadata: {
-        producer: 'fengine',
+        producer: 'ledger-core',
         data_classification: 'restricted',
       },
     });
