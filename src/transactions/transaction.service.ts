@@ -1,6 +1,6 @@
 /*
- * getfluxo.io - Transaction Processing & Payment Settlement Engine
- * Copyright (c) 2025 getfluxo.io
+ * mavula.io - Transaction Processing & Payment Settlement Engine
+ * Copyright (c) 2025 mavula.io
  * 
  * Author: EstandarMustaq <estandarmustaq@mavula.io>
  * License: Proprietary - See LICENSE file

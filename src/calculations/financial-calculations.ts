@@ -1,6 +1,6 @@
 /*
- * getfluxo.io - Financial Calculations Engine
- * Copyright (c) 2025 getfluxo.io
+ * mavula.io - Financial Calculations Engine
+ * Copyright (c) 2025 mavula.io
  * 
  * Author: EstandarMustaq <estandarmustaq@mavula.io>
  * License: Proprietary - See LICENSE file
