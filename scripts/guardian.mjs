@@ -25,6 +25,12 @@ function requireText(path, pattern, message) {
   if (!pattern.test(read(path))) fail(message);
 }
 
+function shouldScan(path) {
+  if (path === "scripts/guardian.mjs") return false;
+  if (/\.(png|jpg|jpeg|webp|gif|ico|pdf|zip|gz|tgz)$/i.test(path)) return false;
+  return true;
+}
+
 const pkg = json("package.json");
 
 if (pkg.name !== "@mavula/ledger-core") fail("package name must be @mavula/ledger-core");
@@ -50,13 +56,11 @@ const tracked = spawnSync("git", ["ls-files"], { encoding: "utf8" });
 if (tracked.status !== 0) fail("git ls-files failed");
 for (const file of tracked.stdout.split("\n").filter(Boolean)) {
   if (/(^|\/)\.env($|\.(?!example$))/.test(file)) fail(`${file} must not be tracked`);
-}
-
-for (const path of ["package.json", "README.md", ".github/CODEOWNERS"]) {
-  if (path === "scripts/guardian.mjs") continue;
-  const content = read(path);
-  if (/getfluxo-io|@getfluxo|packages\/fengine|packages\/fwk|packages\/fpay|packages\/finfra/.test(content)) {
-    fail(`${path} contains legacy public identifiers`);
+  if (shouldScan(file)) {
+    const content = read(file);
+    if (/getfluxo-io|@getfluxo|\bgetfluxo\b|packages\/fengine|packages\/fwk|packages\/fpay|packages\/finfra/.test(content)) {
+      fail(`${file} contains legacy public identifiers`);
+    }
   }
 }
 

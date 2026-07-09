@@ -182,7 +182,7 @@ Environment Variables:
   BATCH_SIZE            Rows per batch for data migration (default: 1000)
 
 Example:
-  export DATABASE_URL=postgresql://user:pass@localhost/getfluxo
+  export DATABASE_URL=postgresql://user:pass@localhost/mavula
   $0 create inst_001
   $0 migrate inst_001
 HELP
