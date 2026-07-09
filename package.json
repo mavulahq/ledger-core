@@ -9,6 +9,7 @@
   "scripts": {
     "prebuild": "prisma generate",
     "build": "tsc -p tsconfig.json",
+    "guardian:check": "node scripts/guardian.mjs",
     "start": "node dist/main.js",
     "start:dev": "ts-node-dev --respawn --transpile-only src/main.ts",
     "check:no-console": "node scripts/check-no-console.js",
@@ -48,6 +49,7 @@
     "ts-node-dev": "^2.0.0",
     "jest": "^29.0.0",
     "ts-jest": "^29.0.0",
+    "@types/express": "^4.17.21",
     "@types/jest": "^29.0.0",
     "@nestjs/testing": "^10.0.0",
     "@types/supertest": "^6.0.2",
