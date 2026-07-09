@@ -1,0 +1,62 @@
+name: MAVULA Guardian
+
+on:
+  pull_request: {}
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ledger-core-guardian-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guardian:
+    name: guardian
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mavula
+          POSTGRES_PASSWORD: mavula_dev
+          POSTGRES_DB: mavula
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mavula -d mavula" --health-interval=10s --health-timeout=5s --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=5
+    env:
+      DATABASE_URL: postgresql://mavula:mavula_dev@127.0.0.1:5432/mavula?schema=public
+      REDIS_URL: redis://127.0.0.1:6379
+      INTERNAL_API_KEY: guardian-internal-api-key
+      JWT_SECRET: guardian-jwt-secret
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
+      - name: Use Node.js 22.22.3
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.22.3
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Run guardian
+        run: pnpm guardian:check
+      - name: Build
+        run: pnpm build
+      - name: Apply database schema
+        run: pnpm prisma db push --schema prisma/schema.prisma
+      - name: Test
+        run: pnpm test:all
