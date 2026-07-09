@@ -16,7 +16,7 @@ import { AuditTrailService } from '../services/audit-trail.service';
 import { DomainEventFactory } from '../domain-events/domain-event-factory.service';
 import { DomainOutboxService } from '../domain-events/domain-outbox.service';
 
-// Product types supported by getfluxo
+// Product types supported by MAVULA Ledger Core.
 export enum ProductType {
   CHECKING = 'CHECKING', // Conta corrente (transferências, débitos)
   SAVINGS = 'SAVINGS', // Conta poupança (juros, limites levantamento)
