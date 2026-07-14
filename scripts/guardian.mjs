@@ -47,7 +47,12 @@ if (pkg.author !== "EstandarMustaq <estandarmustaq@mavula.io>") {
   "LICENSE",
   "README.md",
   "prisma/schema.prisma",
+  "prisma/baseline.schema.prisma",
+  "prisma/migrations/20260714000100_baseline/migration.sql",
+  "prisma/migrations/20260714000200_transactional_tenant_rls/migration.sql",
   "scripts/check-no-console.js",
+  "scripts/migrate-database.mjs",
+  "scripts/provision-database-role.mjs",
   "src/auth/access-token.guard.ts",
   "src/auth/permissions.guard.ts",
   "src/auth/public.decorator.ts",
@@ -64,6 +69,13 @@ for (const file of tracked.stdout.split("\n").filter(Boolean)) {
     const content = read(file);
     if (/getfluxo-io|@getfluxo|\bgetfluxo\b|packages\/fengine|packages\/fwk|packages\/fpay|packages\/finfra|JWT_SECRET|INTERNAL_API_KEY/.test(content)) {
       fail(`${file} contains legacy public identifiers`);
+    }
+    if (
+      file.startsWith("src/") &&
+      file !== "src/services/prisma.service.ts" &&
+      /prisma\.(db|account)|ensureTenant|setTenantContext|current_tenant_id['"`),\s]*,?\s*['"`]\*/.test(content)
+    ) {
+      fail(`${file} bypasses the transactional tenant boundary`);
     }
   }
 }

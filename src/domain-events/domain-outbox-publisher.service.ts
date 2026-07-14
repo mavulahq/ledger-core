@@ -14,7 +14,7 @@ export class DomainOutboxPublisherService implements OnModuleInit, OnModuleDestr
   onModuleInit(): void {
     if (process.env.FENGINE_OUTBOX_PUBLISHER_ENABLED === 'true') {
       this.timer = setInterval(
-        () => void this.publishPending().catch(() => undefined),
+        () => void this.publishAllPending().catch(() => undefined),
         Number(process.env.FENGINE_OUTBOX_POLL_MS || 1000),
       );
     }
@@ -27,8 +27,11 @@ export class DomainOutboxPublisherService implements OnModuleInit, OnModuleDestr
     }
   }
 
-  async publishPending(limit = Number(process.env.FENGINE_OUTBOX_BATCH_SIZE || 25)) {
-    const claimed = await this.outbox.claimPending(limit);
+  async publishPending(
+    tenantId: string,
+    limit = Number(process.env.FENGINE_OUTBOX_BATCH_SIZE || 25),
+  ) {
+    const claimed = await this.outbox.claimPending(tenantId, limit);
     let published = 0;
     let failed = 0;
 
@@ -49,7 +52,21 @@ export class DomainOutboxPublisherService implements OnModuleInit, OnModuleDestr
       claimed: claimed.length,
       published,
       failed,
-      status: await this.outbox.stats(),
+      status: await this.outbox.stats(tenantId),
     };
+  }
+
+  async publishAllPending(limit = Number(process.env.FENGINE_OUTBOX_BATCH_SIZE || 25)) {
+    const tenantIds = await this.outbox.pendingTenantIds(limit);
+    let claimed = 0;
+    let published = 0;
+    let failed = 0;
+    for (const tenantId of tenantIds) {
+      const result = await this.publishPending(tenantId, limit);
+      claimed += result.claimed;
+      published += result.published;
+      failed += result.failed;
+    }
+    return { claimed, published, failed, status: await this.outbox.globalStats() };
   }
 }

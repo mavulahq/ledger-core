@@ -168,10 +168,7 @@ export class ProductConfigService {
     productType: ProductType,
     config: Partial<ProductSchema>,
   ): Promise<ProductSchema> {
-    await this.prisma.ensureTenant(tenantId);
-
-    return this.prisma.db.$transaction(async (tx: any) => {
-      await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
+    return this.prisma.withTenant(tenantId, async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}), hashtext(${productId}))`;
 
       const [existingRow] = (await tx.$queryRaw`

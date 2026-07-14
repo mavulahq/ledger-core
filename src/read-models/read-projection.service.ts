@@ -58,9 +58,9 @@ export class ReadProjectionService {
   }
 
   async rebuild(input: {
-    tenantId?: string;
+    tenantId: string;
     projectionName?: ReadProjectionName;
-  } = {}): Promise<ProjectionRebuildResult> {
+  }): Promise<ProjectionRebuildResult> {
     const projectionNames = input.projectionName ? [input.projectionName] : [...READ_PROJECTION_NAMES];
     await this.clear(input.tenantId, projectionNames);
 
@@ -105,13 +105,14 @@ export class ReadProjectionService {
         .sort((left, right) => right.updated_at.getTime() - left.updated_at.getTime());
     }
 
-    await this.enterTenant(tenantId);
-    const rows = await this.prisma.db.$queryRaw<any[]>`
-      SELECT * FROM "read_projections"
-      WHERE "tenantId" = ${tenantId} AND "projectionName" = ${projectionName}
-      ORDER BY "updatedAt" DESC
-    `;
-    return rows.map((row) => this.projectionFromRow(row));
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const rows = await tx.$queryRaw<any[]>`
+        SELECT * FROM "read_projections"
+        WHERE "tenantId" = ${tenantId} AND "projectionName" = ${projectionName}
+        ORDER BY "updatedAt" DESC
+      `;
+      return rows.map((row) => this.projectionFromRow(row));
+    });
   }
 
   async get(
@@ -123,44 +124,37 @@ export class ReadProjectionService {
       return this.memory.get(this.key(tenantId, projectionName, entityId));
     }
 
-    await this.enterTenant(tenantId);
-    const [row] = await this.prisma.db.$queryRaw<any[]>`
-      SELECT * FROM "read_projections"
-      WHERE "tenantId" = ${tenantId}
-        AND "projectionName" = ${projectionName}
-        AND "entityId" = ${entityId}
-      LIMIT 1
-    `;
-    return row ? this.projectionFromRow(row) : undefined;
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const [row] = await tx.$queryRaw<any[]>`
+        SELECT * FROM "read_projections"
+        WHERE "tenantId" = ${tenantId}
+          AND "projectionName" = ${projectionName}
+          AND "entityId" = ${entityId}
+        LIMIT 1
+      `;
+      return row ? this.projectionFromRow(row) : undefined;
+    });
   }
 
-  async status(tenantId?: string): Promise<{
+  async status(tenantId: string): Promise<{
     status: 'ok';
     projections: ProjectionCheckpoint[];
   }> {
     if (!this.prisma.isConfigured) {
       const projections = [...this.checkpoints.values()]
-        .filter((checkpoint) => !tenantId || checkpoint.tenant_id === tenantId)
+        .filter((checkpoint) => checkpoint.tenant_id === tenantId)
         .sort((left, right) => left.projection_name.localeCompare(right.projection_name));
       return { status: 'ok', projections };
     }
 
-    if (tenantId) {
-      await this.enterTenant(tenantId);
-    } else {
-      await this.prisma.setTenantContext('*');
-    }
-    const rows = tenantId
-      ? await this.prisma.db.$queryRaw<any[]>`
-          SELECT * FROM "projection_checkpoints"
-          WHERE "tenantId" = ${tenantId}
-          ORDER BY "projectionName" ASC
-        `
-      : await this.prisma.db.$queryRaw<any[]>`
-          SELECT * FROM "projection_checkpoints"
-          ORDER BY "tenantId" ASC, "projectionName" ASC
-        `;
-    return { status: 'ok', projections: rows.map((row) => this.checkpointFromRow(row)) };
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const rows = await tx.$queryRaw<any[]>`
+        SELECT * FROM "projection_checkpoints"
+        WHERE "tenantId" = ${tenantId}
+        ORDER BY "projectionName" ASC
+      `;
+      return { status: 'ok' as const, projections: rows.map((row) => this.checkpointFromRow(row)) };
+    });
   }
 
   projectionName(value: string): ReadProjectionName {
@@ -204,11 +198,8 @@ export class ReadProjectionService {
     event: DomainEventEnvelope,
     target: ProjectionTarget,
   ): Promise<ProjectionApplyResult> {
-    await this.prisma.ensureTenant(event.tenant_id);
-
     try {
-      return await this.prisma.db.$transaction(async (tx: any) => {
-        await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${event.tenant_id}, true)`;
+      return await this.prisma.withTenant(event.tenant_id, async (tx) => {
         const processing = await this.startInboxProcessing(tx, event);
         if (!processing.started) {
           return {
@@ -416,13 +407,13 @@ export class ReadProjectionService {
     }
   }
 
-  private async clear(tenantId: string | undefined, projectionNames: ReadProjectionName[]): Promise<void> {
+  private async clear(tenantId: string, projectionNames: ReadProjectionName[]): Promise<void> {
     if (!this.prisma.isConfigured) {
       for (const key of [...this.memory.keys()]) {
         const record = this.memory.get(key);
         if (
           record &&
-          (!tenantId || record.tenant_id === tenantId) &&
+          record.tenant_id === tenantId &&
           projectionNames.includes(record.projection_name)
         ) {
           this.memory.delete(key);
@@ -432,7 +423,7 @@ export class ReadProjectionService {
         const checkpoint = this.checkpoints.get(key);
         if (
           checkpoint &&
-          (!tenantId || checkpoint.tenant_id === tenantId) &&
+          checkpoint.tenant_id === tenantId &&
           projectionNames.includes(checkpoint.projection_name)
         ) {
           this.checkpoints.delete(key);
@@ -441,32 +432,18 @@ export class ReadProjectionService {
       return;
     }
 
-    if (tenantId) {
-      await this.enterTenant(tenantId);
+    await this.prisma.withTenant(tenantId, async (tx) => {
       for (const projectionName of projectionNames) {
-        await this.prisma.db.$executeRaw`
+        await tx.$executeRaw`
           DELETE FROM "read_projections"
           WHERE "tenantId" = ${tenantId} AND "projectionName" = ${projectionName}
         `;
-        await this.prisma.db.$executeRaw`
+        await tx.$executeRaw`
           DELETE FROM "projection_checkpoints"
           WHERE "tenantId" = ${tenantId} AND "projectionName" = ${projectionName}
         `;
       }
-      return;
-    }
-
-    await this.prisma.setTenantContext('*');
-    for (const projectionName of projectionNames) {
-      await this.prisma.db.$executeRaw`
-        DELETE FROM "read_projections"
-        WHERE "projectionName" = ${projectionName}
-      `;
-      await this.prisma.db.$executeRaw`
-        DELETE FROM "projection_checkpoints"
-        WHERE "projectionName" = ${projectionName}
-      `;
-    }
+    });
   }
 
   private updateMemoryCheckpoint(
@@ -703,11 +680,6 @@ export class ReadProjectionService {
         this.memoryLocks.delete(lockKey);
       }
     }
-  }
-
-  private async enterTenant(tenantId: string): Promise<void> {
-    await this.prisma.ensureTenant(tenantId);
-    await this.prisma.setTenantContext(tenantId);
   }
 
   private key(tenantId: string, projectionName: ReadProjectionName, entityId: string): string {

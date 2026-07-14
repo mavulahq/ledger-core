@@ -1,5 +1,5 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { Job, JobsOptions, Queue } from 'bullmq';
 import { DomainEventEnvelope } from '../domain-events/domain-event.types';
 import { EngineWorkerJob, EnqueueEngineEventInput } from './worker.types';
@@ -17,7 +17,7 @@ export class WorkerQueueService implements OnModuleDestroy {
 
   async enqueue(input: EnqueueEngineEventInput): Promise<EngineWorkerJob> {
     const now = new Date().toISOString();
-    const id = this.jobId(input.idempotency_key);
+    const id = this.jobId(input.tenant_id, input.idempotency_key);
     const job: EngineWorkerJob = {
       id,
       queue: 'platform',
@@ -66,13 +66,15 @@ export class WorkerQueueService implements OnModuleDestroy {
     });
   }
 
-  async get(jobId: string): Promise<EngineWorkerJob | null> {
+  async get(tenantId: string, jobId: string): Promise<EngineWorkerJob | null> {
     if (!this.queue) {
-      return this.memory.get(jobId) || null;
+      const job = this.memory.get(jobId);
+      return job?.tenant_id === tenantId ? job : null;
     }
 
     const job = await this.queue.getJob(jobId);
-    return job ? this.fromBullJob(job) : null;
+    const result = job ? await this.fromBullJob(job) : null;
+    return result?.tenant_id === tenantId ? result : null;
   }
 
   private usesMemory(): boolean {
@@ -94,14 +96,15 @@ export class WorkerQueueService implements OnModuleDestroy {
     };
   }
 
-  private jobId(idempotencyKey?: string): string {
+  private jobId(tenantId: string, idempotencyKey?: string): string {
     if (!idempotencyKey) {
       return `ledger-core-${randomUUID()}`;
     }
     if (!/^[a-zA-Z0-9_-]{1,100}$/.test(idempotencyKey)) {
       throw new Error('idempotency_key must use letters, numbers, underscore, or dash');
     }
-    return `ledger-core-${idempotencyKey}`;
+    const digest = createHash('sha256').update(`${tenantId}:${idempotencyKey}`).digest('hex').slice(0, 32);
+    return `ledger-core-${digest}`;
   }
 
   private async fromBullJob(job: Job): Promise<EngineWorkerJob> {

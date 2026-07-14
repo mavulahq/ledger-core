@@ -27,13 +27,14 @@ describe('ledger-core worker communication', () => {
     });
 
     expect(first).toMatchObject({
-      id: 'ledger-core-loan-approved-001',
       queue: 'platform',
       type: 'LEDGER_CORE_EVENT',
       status: 'QUEUED',
       payload: { loan_id: 'loan_001', event_type: 'LOAN_APPROVED' },
     });
-    await expect(queue.get(first.id)).resolves.toEqual(first);
+    expect(first.id).toBe(jobId('tenant_001', 'loan-approved-001'));
+    await expect(queue.get('tenant_001', first.id)).resolves.toEqual(first);
+    await expect(queue.get('tenant_002', first.id)).resolves.toBeNull();
   });
 
   it('publishes canonical domain events through the Outbox publisher', async () => {
@@ -80,13 +81,13 @@ describe('ledger-core worker communication', () => {
     await outbox.append(paymentEvent);
     await outbox.append(productEvent);
     await outbox.append(journalEvent);
-    await expect(publisher.publishPending(1)).resolves.toMatchObject({
+    await expect(publisher.publishPending('tenant_001', 1)).resolves.toMatchObject({
       claimed: 1,
       published: 1,
       failed: 0,
     });
 
-    const queued = await queue.get(`ledger-core-${disbursementEvent.event_id}`);
+    const queued = await queue.get('tenant_001', jobId('tenant_001', disbursementEvent.event_id));
     expect(queued).toMatchObject({
       type: 'LEDGER_CORE_EVENT',
       tenant_id: 'tenant_001',
@@ -99,12 +100,12 @@ describe('ledger-core worker communication', () => {
       event_id: disbursementEvent.event_id,
       event_type: 'lending.loan_disbursed',
     });
-    await expect(publisher.publishPending(1)).resolves.toMatchObject({
+    await expect(publisher.publishPending('tenant_001', 1)).resolves.toMatchObject({
       claimed: 1,
       published: 1,
       failed: 0,
     });
-    const paymentQueued = await queue.get(`ledger-core-${paymentEvent.event_id}`);
+    const paymentQueued = await queue.get('tenant_001', jobId('tenant_001', paymentEvent.event_id));
     expect(paymentQueued).toMatchObject({
       payload: {
         domain_event: true,
@@ -116,12 +117,12 @@ describe('ledger-core worker communication', () => {
       allocation: { principal: '1375.00', interest: '625.00', fees: '500.00' },
       balance_after: '23625.00',
     });
-    await expect(publisher.publishPending(1)).resolves.toMatchObject({
+    await expect(publisher.publishPending('tenant_001', 1)).resolves.toMatchObject({
       claimed: 1,
       published: 1,
       failed: 0,
     });
-    const productQueued = await queue.get(`ledger-core-${productEvent.event_id}`);
+    const productQueued = await queue.get('tenant_001', jobId('tenant_001', productEvent.event_id));
     expect(productQueued).toMatchObject({
       payload: {
         domain_event: true,
@@ -133,12 +134,12 @@ describe('ledger-core worker communication', () => {
       product_type: ProductType.LOAN,
       configuration_version: 2,
     });
-    await expect(publisher.publishPending(1)).resolves.toMatchObject({
+    await expect(publisher.publishPending('tenant_001', 1)).resolves.toMatchObject({
       claimed: 1,
       published: 1,
       failed: 0,
     });
-    const journalQueued = await queue.get(`ledger-core-${journalEvent.event_id}`);
+    const journalQueued = await queue.get('tenant_001', jobId('tenant_001', journalEvent.event_id));
     expect(journalQueued).toMatchObject({
       payload: {
         domain_event: true,
@@ -281,7 +282,7 @@ describe('ledger-core worker communication', () => {
     });
 
     await outbox.append(event);
-    const [claimed] = await outbox.claimPending(1);
+    const [claimed] = await outbox.claimPending('tenant_001', 1);
     (outbox as any).memory.set(event.event_id, {
       ...claimed,
       locked_by: 'ledger-core-outbox-new-owner',
@@ -317,7 +318,7 @@ describe('ledger-core worker communication', () => {
     });
 
     const first = await inbox.startProcessing(event, 'workflow-dispatch');
-    (inbox as any).memory.set(`${event.event_id}:workflow-dispatch`, {
+    (inbox as any).memory.set(`${event.tenant_id}:${event.event_id}:workflow-dispatch`, {
       ...first.record,
       status: 'PROCESSING',
       updated_at: new Date(Date.now() - 1000),
@@ -331,6 +332,11 @@ describe('ledger-core worker communication', () => {
   });
 
 });
+
+function jobId(tenantId: string, idempotencyKey: string): string {
+  const digest = createHash('sha256').update(`${tenantId}:${idempotencyKey}`).digest('hex').slice(0, 32);
+  return `ledger-core-${digest}`;
+}
 
 function approvedLoan(): Loan {
   return {
@@ -403,3 +409,4 @@ function journalEntry(): JournalEntry {
     metadata: {},
   };
 }
+import { createHash } from 'crypto';

@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, NotFoundException, Param, Post, Req } from '@nestjs/common';
 import { DomainOutboxPublisherService } from '../domain-events/domain-outbox-publisher.service';
 import { ReadProjectionService } from '../read-models/read-projection.service';
 import { EngineEventService } from '../worker/engine-event.service';
@@ -17,8 +17,9 @@ export class InternalWorkerController {
   ) {}
 
   @Post('jobs')
-  enqueue(@Body() body: EnqueueEngineEventInput) {
+  enqueue(@Req() req: any, @Body() body: EnqueueEngineEventInput) {
     this.validateEvent(body);
+    this.assertTenant(req, body.tenant_id);
     return this.queue.enqueue({
       ...body,
       payload: body.payload || {},
@@ -27,8 +28,8 @@ export class InternalWorkerController {
   }
 
   @Get('jobs/:jobId')
-  async get(@Param('jobId') jobId: string) {
-    const job = await this.queue.get(jobId);
+  async get(@Req() req: any, @Param('jobId') jobId: string) {
+    const job = await this.queue.get(this.tenant(req), jobId);
     if (!job) {
       throw new NotFoundException(`Worker job not found: ${jobId}`);
     }
@@ -36,29 +37,31 @@ export class InternalWorkerController {
   }
 
   @Post('events')
-  callback(@Body() body: EngineEventCallback) {
+  callback(@Req() req: any, @Body() body: EngineEventCallback) {
     if (!body?.job_id) throw new BadRequestException('job_id is required');
     this.validateEvent(body);
+    this.assertTenant(req, body.tenant_id);
     return this.events.handle({ ...body, payload: body.payload || {} });
   }
 
   @Post('domain-events')
-  domainCallback(@Body() body: DomainEventWorkerCallback) {
+  domainCallback(@Req() req: any, @Body() body: DomainEventWorkerCallback) {
     if (!body?.event) throw new BadRequestException('event is required');
+    this.assertTenant(req, body.event.tenant_id);
     return this.events.handleDomainEvent(body.event, body.job_id);
   }
 
   @Post('outbox/publish')
-  publishOutbox(@Body() body: { limit?: number } = {}) {
+  publishOutbox(@Req() req: any, @Body() body: { limit?: number } = {}) {
     const limit = body.limit === undefined ? undefined : Number(body.limit);
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
       throw new BadRequestException('limit must be a positive integer');
     }
-    return this.outboxPublisher.publishPending(limit);
+    return this.outboxPublisher.publishPending(this.tenant(req), limit);
   }
 
   @Post('projections/rebuild')
-  rebuildProjections(@Body() body: { tenant_id?: string; projection_name?: string } = {}) {
+  rebuildProjections(@Req() req: any, @Body() body: { tenant_id?: string; projection_name?: string } = {}) {
     let projectionName;
     try {
       projectionName = body.projection_name
@@ -67,8 +70,10 @@ export class InternalWorkerController {
     } catch (error) {
       throw new BadRequestException((error as Error).message);
     }
+    const tenantId = this.tenant(req);
+    if (body.tenant_id) this.assertTenant(req, body.tenant_id);
     return this.projections.rebuild({
-      tenantId: body.tenant_id,
+      tenantId,
       projectionName,
     });
   }
@@ -84,5 +89,15 @@ export class InternalWorkerController {
     ) {
       throw new BadRequestException('max_attempts must be a positive integer');
     }
+  }
+
+  private assertTenant(req: any, tenantId: string | undefined): void {
+    if (!tenantId || tenantId !== this.tenant(req)) {
+      throw new ForbiddenException('Authenticated tenant context does not match the request');
+    }
+  }
+
+  private tenant(req: any): string {
+    return req.tenantId;
   }
 }

@@ -385,13 +385,16 @@ describe('read projections', () => {
   });
 
   it('includes projection tables in tenant isolation policies', () => {
-    const rls = readFileSync('migrations/rls_setup.sql', 'utf8');
+    const rls = readFileSync(
+      'prisma/migrations/20260714000200_transactional_tenant_rls/migration.sql',
+      'utf8',
+    );
 
-    expect(rls).toContain('ALTER COLUMN "lagMs" TYPE bigint');
-    expect(rls).toContain('ALTER TABLE public.read_projections ENABLE ROW LEVEL SECURITY');
-    expect(rls).toContain('ALTER TABLE public.projection_checkpoints ENABLE ROW LEVEL SECURITY');
-    expect(rls).toContain('tenant_isolation_read_projections');
-    expect(rls).toContain('tenant_isolation_projection_checkpoints');
+    expect(rls).toContain("'read_projections'");
+    expect(rls).toContain("'projection_checkpoints'");
+    expect(rls).toContain('ENABLE ROW LEVEL SECURITY');
+    expect(rls).toContain('FORCE ROW LEVEL SECURITY');
+    expect(rls).not.toContain("current_tenant_id() = '*'");
   });
 
   it('rejects malformed envelopes before projection processing', async () => {
@@ -431,12 +434,7 @@ describe('read projections', () => {
     };
     const prisma = {
       isConfigured: true,
-      ensureTenant: jest.fn().mockResolvedValue(undefined),
-      setTenantContext: jest.fn().mockResolvedValue(undefined),
-      db: {
-        $transaction: jest.fn(async (callback) => callback(tx)),
-        $executeRaw: jest.fn().mockResolvedValue(undefined),
-      },
+      withTenant: jest.fn(async (_tenantId, callback) => callback(tx)),
     } as any;
     const databaseService = new ReadProjectionService(
       prisma,
@@ -446,7 +444,7 @@ describe('read projections', () => {
 
     await expect(databaseService.apply(event)).rejects.toThrow('projection select failed');
     expect(
-      prisma.db.$executeRaw.mock.calls.some((call) =>
+      tx.$executeRaw.mock.calls.some((call) =>
         String(call[0]).includes('INSERT INTO "domain_inbox_events"'),
       ),
     ).toBe(true);

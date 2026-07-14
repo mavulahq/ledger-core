@@ -214,6 +214,21 @@ describe('fengine - Integration Tests (app composition)', () => {
       expect(exported.entity_name).toBe('api_customer_profile');
     });
 
+    it('does not export a schema through another tenant context', async () => {
+      const schema = await schemasController.create(
+        { tenantId },
+        {
+          entity_name: 'tenant_private_export',
+          display_name: 'Tenant Private Export',
+          fields: [{ name: 'reference', type: 'STRING', required: true }],
+        },
+      );
+
+      await expect(
+        schemasController.export({ tenantId: 'test_inst_002' }, schema.entity_id),
+      ).rejects.toThrow('Schema not found');
+    });
+
     it('creates and executes workflows', async () => {
       const workflow = await workflowsController.create(
         { tenantId },

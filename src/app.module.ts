@@ -35,6 +35,7 @@ import { SchemaManagerService } from './schema-manager/schema-manager.service';
 import { TransactionService } from './transactions/transaction.service';
 import { EngineEventService } from './worker/engine-event.service';
 import { AccessTokenGuard } from './auth/access-token.guard';
+import { TenantBoundaryGuard } from './auth/tenant-boundary.guard';
 import { PermissionsGuard } from './auth/permissions.guard';
 import { WorkerQueueService } from './worker/worker-queue.service';
 
@@ -72,6 +73,7 @@ import { WorkerQueueService } from './worker/worker-queue.service';
     DomainInboxService,
     DomainOutboxPublisherService,
     { provide: APP_GUARD, useClass: AccessTokenGuard },
+    { provide: APP_GUARD, useClass: TenantBoundaryGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
 })

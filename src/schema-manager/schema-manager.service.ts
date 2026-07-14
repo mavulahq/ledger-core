@@ -104,7 +104,7 @@ export class SchemaManagerService {
       updated_at: new Date(),
     };
 
-    this.schemas.set(schema.entity_id, schema);
+    this.schemas.set(this.tenantKey(tenantId, schema.entity_id), schema);
     await this.store.saveSchema(tenantId, schema);
     this.auditTrail.record({
       tenant_id: tenantId,
@@ -215,7 +215,7 @@ export class SchemaManagerService {
       enabled: true,
     };
 
-    this.workflows.set(wf.workflow_id, wf);
+    this.workflows.set(this.tenantKey(tenantId, wf.workflow_id), wf);
     await this.store.saveWorkflow(tenantId, wf);
     this.auditTrail.record({
       tenant_id: tenantId,
@@ -379,7 +379,7 @@ export class SchemaManagerService {
     workflowId: string,
     context: Record<string, any>
   ): Promise<{ success: boolean; results: any[] }> {
-    const workflow = this.workflows.get(workflowId)
+    const workflow = this.workflows.get(this.tenantKey(tenantId, workflowId))
       || (await this.store.listWorkflows(tenantId)).find((candidate) => candidate.workflow_id === workflowId);
     if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
 
@@ -479,7 +479,7 @@ export class SchemaManagerService {
    * Export schema as JSON (for version control, sharing)
    */
   async exportSchema(tenantId: string, entityId: string): Promise<any> {
-    const schema = this.schemas.get(entityId) || await this.store.getSchema(tenantId, entityId);
+    const schema = this.schemas.get(this.tenantKey(tenantId, entityId)) || await this.store.getSchema(tenantId, entityId);
     if (!schema) throw new Error(`Schema not found: ${entityId}`);
 
     return {
@@ -494,5 +494,9 @@ export class SchemaManagerService {
    */
   importSchema(tenantId: string, data: any): Promise<CustomEntitySchema> {
     return this.createEntitySchema(tenantId, data);
+  }
+
+  private tenantKey(tenantId: string, entityId: string): string {
+    return `${tenantId}:${entityId}`;
   }
 }

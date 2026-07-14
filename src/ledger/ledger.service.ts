@@ -396,10 +396,7 @@ export class LedgerService {
     tenantId: string,
     entry: JournalEntry,
   ): Promise<ConfiguredJournalPostResult> {
-    await this.prisma.ensureTenant(tenantId);
-
-    return this.prisma.db.$transaction(async (tx: any) => {
-      await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
+    return this.prisma.withTenant(tenantId, async (tx) => {
       const lines: LedgerJournalPostedPayload['lines'] = [];
 
       const inserted = await tx.$queryRaw<any[]>`
@@ -472,13 +469,14 @@ export class LedgerService {
       );
     }
 
-    await this.prisma.setTenantContext(tenantId);
-    const [row] = await this.prisma.db.$queryRaw<any[]>`
-      SELECT * FROM "journal_entries"
-      WHERE "tenantId" = ${tenantId} AND "id" = ${entryId} AND "status" = 'POSTED'
-      LIMIT 1
-    `;
-    return row ? this.journalEntryFromRow(row) : undefined;
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const [row] = await tx.$queryRaw<any[]>`
+        SELECT * FROM "journal_entries"
+        WHERE "tenantId" = ${tenantId} AND "id" = ${entryId} AND "status" = 'POSTED'
+        LIMIT 1
+      `;
+      return row ? this.journalEntryFromRow(row) : undefined;
+    });
   }
 
   private async ensureJournalPostedOutbox(tenantId: string, entry: JournalEntry): Promise<void> {

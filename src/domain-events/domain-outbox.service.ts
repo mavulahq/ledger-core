@@ -45,58 +45,51 @@ export class DomainOutboxService {
       return record;
     }
 
-    await this.enterTenant(envelope.tenant_id);
-    const [row] = await this.prisma.db.$queryRaw<any[]>`
-      INSERT INTO "domain_outbox_events" (
-        "eventId", "tenantId", "eventType", "eventVersion", "occurredAt",
-        "aggregateType", "aggregateId", "aggregateVersion",
-        "correlationId", "causationId", "idempotencyKey",
-        "payload", "metadata", "status", "attempts", "maxAttempts", "availableAt", "updatedAt"
-      )
-      VALUES (
-        ${envelope.event_id}, ${envelope.tenant_id}, ${envelope.event_type}, ${envelope.event_version}, ${new Date(envelope.occurred_at)},
-        ${envelope.aggregate.type}, ${envelope.aggregate.id}, ${envelope.aggregate.version},
-        ${envelope.correlation_id}, ${envelope.causation_id}, ${envelope.idempotency_key || null},
-        CAST(${JSON.stringify(envelope.payload)} AS jsonb), CAST(${JSON.stringify(envelope.metadata)} AS jsonb),
-        'PENDING', 0, ${maxAttempts}, now(), now()
-      )
-      ON CONFLICT ("tenantId", "idempotencyKey") DO UPDATE SET
-        "updatedAt" = "domain_outbox_events"."updatedAt"
-      RETURNING *
-    `;
-    return this.fromRow(row);
+    return this.prisma.withTenant(envelope.tenant_id, async (tx) => {
+      const [row] = await tx.$queryRaw<any[]>`
+        INSERT INTO "domain_outbox_events" (
+          "eventId", "tenantId", "eventType", "eventVersion", "occurredAt",
+          "aggregateType", "aggregateId", "aggregateVersion",
+          "correlationId", "causationId", "idempotencyKey",
+          "payload", "metadata", "status", "attempts", "maxAttempts", "availableAt", "updatedAt"
+        )
+        VALUES (
+          ${envelope.event_id}, ${envelope.tenant_id}, ${envelope.event_type}, ${envelope.event_version}, ${new Date(envelope.occurred_at)},
+          ${envelope.aggregate.type}, ${envelope.aggregate.id}, ${envelope.aggregate.version},
+          ${envelope.correlation_id}, ${envelope.causation_id}, ${envelope.idempotency_key || null},
+          CAST(${JSON.stringify(envelope.payload)} AS jsonb), CAST(${JSON.stringify(envelope.metadata)} AS jsonb),
+          'PENDING', 0, ${maxAttempts}, now(), now()
+        )
+        ON CONFLICT ("tenantId", "idempotencyKey") DO UPDATE SET
+          "updatedAt" = "domain_outbox_events"."updatedAt"
+        RETURNING *
+      `;
+      return this.fromRow(row);
+    });
   }
 
-  async list(tenantId?: string): Promise<DomainOutboxRecord[]> {
+  async list(tenantId: string): Promise<DomainOutboxRecord[]> {
     if (!this.prisma.isConfigured) {
       return [...this.memory.values()].filter(
-        (record) => !tenantId || record.envelope.tenant_id === tenantId,
+        (record) => record.envelope.tenant_id === tenantId,
       );
     }
 
-    if (tenantId) {
-      await this.enterTenant(tenantId);
-    } else {
-      await this.enterSystemContext();
-    }
-    const rows = tenantId
-      ? await this.prisma.db.$queryRaw<any[]>`
-          SELECT * FROM "domain_outbox_events"
-          WHERE "tenantId" = ${tenantId}
-          ORDER BY "createdAt" ASC
-        `
-      : await this.prisma.db.$queryRaw<any[]>`
-          SELECT * FROM "domain_outbox_events"
-          ORDER BY "createdAt" ASC
-        `;
-    return rows.map((row) => this.fromRow(row));
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const rows = await tx.$queryRaw<any[]>`
+        SELECT * FROM "domain_outbox_events"
+        WHERE "tenantId" = ${tenantId}
+        ORDER BY "createdAt" ASC
+      `;
+      return rows.map((row) => this.fromRow(row));
+    });
   }
 
-  async claimPending(limit = 25): Promise<DomainOutboxRecord[]> {
+  async claimPending(tenantId: string, limit = 25): Promise<DomainOutboxRecord[]> {
     if (!this.prisma.isConfigured) {
       const now = new Date();
       return [...this.memory.values()]
-        .filter((record) => this.canClaim(record, now))
+        .filter((record) => record.envelope.tenant_id === tenantId && this.canClaim(record, now))
         .sort((a, b) => a.created_at.getTime() - b.created_at.getTime())
         .slice(0, limit)
         .map((record) => {
@@ -115,8 +108,7 @@ export class DomainOutboxService {
     }
 
     const lockedUntil = new Date(Date.now() + this.leaseMs());
-    const rows = await this.prisma.db.$transaction(async (tx: any) => {
-      await tx.$executeRaw`SELECT set_config('app.current_tenant_id', '*', true)`;
+    const rows = await this.prisma.withTenant(tenantId, async (tx) => {
       return tx.$queryRaw`
         UPDATE "domain_outbox_events"
         SET
@@ -127,7 +119,7 @@ export class DomainOutboxService {
           "updatedAt" = now()
         WHERE "eventId" IN (
           SELECT "eventId" FROM "domain_outbox_events"
-          WHERE (
+          WHERE "tenantId" = ${tenantId} AND (
             ("status" = 'PENDING' AND "availableAt" <= now())
             OR ("status" = 'PUBLISHING' AND "lockedUntil" <= now())
           )
@@ -157,14 +149,14 @@ export class DomainOutboxService {
       return;
     }
 
-    await this.enterSystemContext();
-    await this.prisma.db.$executeRaw`
-      UPDATE "domain_outbox_events"
-      SET "status" = 'PUBLISHED', "publishedAt" = now(), "lockedUntil" = NULL, "lockedBy" = NULL, "updatedAt" = now()
-      WHERE "eventId" = ${record.envelope.event_id}
-        AND "status" = 'PUBLISHING'
-        AND "lockedBy" = ${record.locked_by || null}
-    `;
+    await this.prisma.withTenant(record.envelope.tenant_id, (tx) => tx.$executeRaw`
+        UPDATE "domain_outbox_events"
+        SET "status" = 'PUBLISHED', "publishedAt" = now(), "lockedUntil" = NULL, "lockedBy" = NULL, "updatedAt" = now()
+        WHERE "tenantId" = ${record.envelope.tenant_id}
+          AND "eventId" = ${record.envelope.event_id}
+          AND "status" = 'PUBLISHING'
+          AND "lockedBy" = ${record.locked_by || null}
+      `);
   }
 
   async markPublishFailed(record: DomainOutboxRecord, error: Error): Promise<void> {
@@ -187,24 +179,56 @@ export class DomainOutboxService {
       return;
     }
 
-    await this.enterSystemContext();
-    await this.prisma.db.$executeRaw`
-      UPDATE "domain_outbox_events"
-      SET
-        "status" = ${nextStatus},
-        "availableAt" = ${terminal ? record.available_at : availableAt},
-        "lockedUntil" = NULL,
-        "lockedBy" = NULL,
-        "failedAt" = ${terminal ? new Date() : null},
-        "lastError" = ${message},
-        "updatedAt" = now()
-      WHERE "eventId" = ${record.envelope.event_id}
-        AND "status" = 'PUBLISHING'
-        AND "lockedBy" = ${record.locked_by || null}
-    `;
+    await this.prisma.withTenant(record.envelope.tenant_id, (tx) => tx.$executeRaw`
+        UPDATE "domain_outbox_events"
+        SET
+          "status" = ${nextStatus},
+          "availableAt" = ${terminal ? record.available_at : availableAt},
+          "lockedUntil" = NULL,
+          "lockedBy" = NULL,
+          "failedAt" = ${terminal ? new Date() : null},
+          "lastError" = ${message},
+          "updatedAt" = now()
+        WHERE "tenantId" = ${record.envelope.tenant_id}
+          AND "eventId" = ${record.envelope.event_id}
+          AND "status" = 'PUBLISHING'
+          AND "lockedBy" = ${record.locked_by || null}
+      `);
   }
 
-  async stats(): Promise<Record<DomainOutboxStatus, number>> {
+  async stats(tenantId: string): Promise<Record<DomainOutboxStatus, number>> {
+    const empty = { PENDING: 0, PUBLISHING: 0, PUBLISHED: 0, FAILED: 0 };
+    if (!this.prisma.isConfigured) {
+      return [...this.memory.values()].filter((record) => record.envelope.tenant_id === tenantId).reduce((acc, record) => {
+        acc[record.status] += 1;
+        return acc;
+      }, empty);
+    }
+
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ status: DomainOutboxStatus; count: bigint }>>`
+        SELECT "status", COUNT(*) AS count
+        FROM "domain_outbox_events"
+        WHERE "tenantId" = ${tenantId}
+        GROUP BY "status"
+      `;
+      return rows.reduce((acc, row) => {
+        acc[row.status] = Number(row.count);
+        return acc;
+      }, empty);
+    });
+  }
+
+  async pendingTenantIds(limit = 25): Promise<string[]> {
+    if (!this.prisma.isConfigured) {
+      return [...new Set([...this.memory.values()]
+        .filter((record) => this.canClaim(record, new Date()))
+        .map((record) => record.envelope.tenant_id))].slice(0, limit);
+    }
+    return this.prisma.pendingOutboxTenantIds(limit);
+  }
+
+  async globalStats(): Promise<Record<DomainOutboxStatus, number>> {
     const empty = { PENDING: 0, PUBLISHING: 0, PUBLISHED: 0, FAILED: 0 };
     if (!this.prisma.isConfigured) {
       return [...this.memory.values()].reduce((acc, record) => {
@@ -212,17 +236,9 @@ export class DomainOutboxService {
         return acc;
       }, empty);
     }
-
-    await this.enterSystemContext();
-    const rows = await this.prisma.db.$queryRaw<
-      Array<{ status: DomainOutboxStatus; count: bigint }>
-    >`
-      SELECT "status", COUNT(*) AS count
-      FROM "domain_outbox_events"
-      GROUP BY "status"
-    `;
+    const rows = await this.prisma.globalOutboxStatus();
     return rows.reduce((acc, row) => {
-      acc[row.status] = Number(row.count);
+      acc[row.status as DomainOutboxStatus] = Number(row.count);
       return acc;
     }, empty);
   }
@@ -259,15 +275,6 @@ export class DomainOutboxService {
   private retryDelayMs(attempts: number): number {
     const base = Number(process.env.FENGINE_OUTBOX_BACKOFF_MS || 5000);
     return Math.min(base * Math.max(1, 2 ** Math.max(0, attempts - 1)), 300000);
-  }
-
-  private async enterTenant(tenantId: string): Promise<void> {
-    await this.prisma.ensureTenant(tenantId);
-    await this.prisma.setTenantContext(tenantId);
-  }
-
-  private async enterSystemContext(): Promise<void> {
-    await this.prisma.setTenantContext('*');
   }
 
   private fromRow(row: any): DomainOutboxRecord {

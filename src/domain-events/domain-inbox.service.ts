@@ -23,7 +23,7 @@ export class DomainInboxService {
     idempotent?: boolean;
   }> {
     assertDomainEventEnvelope(envelope);
-    const key = this.key(envelope.event_id, consumerName);
+    const key = this.key(envelope.tenant_id, envelope.event_id, consumerName);
 
     if (!this.prisma.isConfigured) {
       const existing = this.memory.get(key);
@@ -46,8 +46,7 @@ export class DomainInboxService {
       return { started: true, record };
     }
 
-    const result = await this.prisma.db.$transaction(async (tx: any) => {
-      await this.enterTenant(envelope.tenant_id, tx);
+    const result = await this.prisma.withTenant(envelope.tenant_id, async (tx) => {
       const inserted = await this.insert(envelope, consumerName, tx);
       if (inserted) {
         return { started: true, record: inserted };
@@ -63,7 +62,7 @@ export class DomainInboxService {
         return { started: true, record: claimed };
       }
 
-      const existing = await this.find(envelope.event_id, consumerName, tx);
+      const existing = await this.find(envelope.tenant_id, envelope.event_id, consumerName, tx);
       if (!existing) {
         throw new Error(
           `Inbox record not found after conflict for ${envelope.event_id}/${consumerName}`,
@@ -100,7 +99,7 @@ export class DomainInboxService {
     error: Error,
   ): Promise<void> {
     const message = error.message.slice(0, 2000);
-    const key = this.key(eventId, consumerName);
+    const key = this.key(tenantId, eventId, consumerName);
     if (!this.prisma.isConfigured) {
       const now = new Date();
       const existing = this.memory.get(key);
@@ -118,37 +117,35 @@ export class DomainInboxService {
       return;
     }
 
-    await this.enterTenant(tenantId);
-    await this.prisma.db.$executeRaw`
-      INSERT INTO "domain_inbox_events" (
-        "id", "eventId", "consumerName", "tenantId", "status", "failedAt", "lastError", "updatedAt"
-      )
-      VALUES (
-        ${randomUUID()}, ${eventId}, ${consumerName}, ${tenantId}, 'FAILED', now(), ${message}, now()
-      )
-      ON CONFLICT ("eventId", "consumerName") DO UPDATE SET
-        "status" = 'FAILED',
-        "processedAt" = NULL,
-        "failedAt" = now(),
-        "lastError" = EXCLUDED."lastError",
-        "updatedAt" = now()
-    `;
+    await this.prisma.withTenant(tenantId, (tx) => tx.$executeRaw`
+        INSERT INTO "domain_inbox_events" (
+          "id", "eventId", "consumerName", "tenantId", "status", "failedAt", "lastError", "updatedAt"
+        )
+        VALUES (
+          ${randomUUID()}, ${eventId}, ${consumerName}, ${tenantId}, 'FAILED', now(), ${message}, now()
+        )
+        ON CONFLICT ("tenantId", "eventId", "consumerName") DO UPDATE SET
+          "status" = 'FAILED',
+          "processedAt" = NULL,
+          "failedAt" = now(),
+          "lastError" = EXCLUDED."lastError",
+          "updatedAt" = now()
+      `);
   }
 
   async reset(tenantId: string, eventId: string, consumerName: string): Promise<void> {
-    const key = this.key(eventId, consumerName);
+    const key = this.key(tenantId, eventId, consumerName);
     if (!this.prisma.isConfigured) {
       this.memory.delete(key);
       return;
     }
 
-    await this.enterTenant(tenantId);
-    await this.prisma.db.$executeRaw`
-      DELETE FROM "domain_inbox_events"
-      WHERE "tenantId" = ${tenantId}
-        AND "eventId" = ${eventId}
-        AND "consumerName" = ${consumerName}
-    `;
+    await this.prisma.withTenant(tenantId, (tx) => tx.$executeRaw`
+        DELETE FROM "domain_inbox_events"
+        WHERE "tenantId" = ${tenantId}
+          AND "eventId" = ${eventId}
+          AND "consumerName" = ${consumerName}
+      `);
   }
 
   private async setFinalStatus(
@@ -158,7 +155,7 @@ export class DomainInboxService {
     status: Extract<DomainInboxStatus, 'PROCESSED' | 'FAILED'>,
     error?: string,
   ): Promise<void> {
-    const key = this.key(eventId, consumerName);
+    const key = this.key(tenantId, eventId, consumerName);
     if (!this.prisma.isConfigured) {
       const record = this.memory.get(key);
       if (record) {
@@ -174,27 +171,27 @@ export class DomainInboxService {
       return;
     }
 
-    await this.enterTenant(tenantId);
-    await this.prisma.db.$executeRaw`
-      UPDATE "domain_inbox_events"
-      SET
-        "status" = ${status},
-        "processedAt" = ${status === 'PROCESSED' ? new Date() : null},
-        "failedAt" = ${status === 'FAILED' ? new Date() : null},
-        "lastError" = ${error || null},
-        "updatedAt" = now()
-      WHERE "eventId" = ${eventId} AND "consumerName" = ${consumerName}
-    `;
+    await this.prisma.withTenant(tenantId, (tx) => tx.$executeRaw`
+        UPDATE "domain_inbox_events"
+        SET
+          "status" = ${status},
+          "processedAt" = ${status === 'PROCESSED' ? new Date() : null},
+          "failedAt" = ${status === 'FAILED' ? new Date() : null},
+          "lastError" = ${error || null},
+          "updatedAt" = now()
+        WHERE "tenantId" = ${tenantId} AND "eventId" = ${eventId} AND "consumerName" = ${consumerName}
+      `);
   }
 
   private async find(
+    tenantId: string,
     eventId: string,
     consumerName: string,
-    db = this.prisma.db,
+    db: any,
   ): Promise<DomainInboxRecord | undefined> {
     const rows = (await db.$queryRaw`
       SELECT * FROM "domain_inbox_events"
-      WHERE "eventId" = ${eventId} AND "consumerName" = ${consumerName}
+      WHERE "tenantId" = ${tenantId} AND "eventId" = ${eventId} AND "consumerName" = ${consumerName}
       LIMIT 1
     `) as any[];
     const [row] = rows;
@@ -204,12 +201,12 @@ export class DomainInboxService {
   private async insert(
     envelope: DomainEventEnvelope,
     consumerName: string,
-    db = this.prisma.db,
+    db: any,
   ): Promise<DomainInboxRecord | undefined> {
     const rows = (await db.$queryRaw`
       INSERT INTO "domain_inbox_events" ("id", "eventId", "consumerName", "tenantId", "status", "updatedAt")
       VALUES (${randomUUID()}, ${envelope.event_id}, ${consumerName}, ${envelope.tenant_id}, 'PROCESSING', now())
-      ON CONFLICT ("eventId", "consumerName") DO NOTHING
+      ON CONFLICT ("tenantId", "eventId", "consumerName") DO NOTHING
       RETURNING *
     `) as any[];
     const [row] = rows;
@@ -220,15 +217,15 @@ export class DomainInboxService {
     tenantId: string,
     eventId: string,
     consumerName: string,
-    db = this.prisma.db,
+    db: any,
   ): Promise<DomainInboxRecord | undefined> {
-    await this.enterTenant(tenantId, db);
     const staleBefore = new Date(Date.now() - this.processingLeaseMs());
     const rows = (await db.$queryRaw`
       UPDATE "domain_inbox_events"
       SET "status" = 'PROCESSING', "lastError" = NULL, "updatedAt" = now()
       WHERE "eventId" = ${eventId}
         AND "consumerName" = ${consumerName}
+        AND "tenantId" = ${tenantId}
         AND (
           "status" = 'FAILED'
           OR ("status" = 'PROCESSING' AND "updatedAt" <= ${staleBefore})
@@ -239,17 +236,8 @@ export class DomainInboxService {
     return row ? this.fromRow(row) : undefined;
   }
 
-  private async enterTenant(tenantId: string, db = this.prisma.db): Promise<void> {
-    await this.prisma.ensureTenant(tenantId);
-    if (db === this.prisma.db) {
-      await this.prisma.setTenantContext(tenantId);
-      return;
-    }
-    await db.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
-  }
-
-  private key(eventId: string, consumerName: string): string {
-    return `${eventId}:${consumerName}`;
+  private key(tenantId: string, eventId: string, consumerName: string): string {
+    return `${tenantId}:${eventId}:${consumerName}`;
   }
 
   private isProcessingStale(updatedAt: Date): boolean {

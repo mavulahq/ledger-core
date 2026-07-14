@@ -21,7 +21,6 @@ model Account {
 
 model Tenant {
   id             String                 @id
-  institutionId  String?                @unique
   name           String?
   jurisdiction   String?
   createdAt      DateTime               @default(now())
@@ -265,7 +264,7 @@ model DomainInboxEvent {
   updatedAt    DateTime  @default(now()) @updatedAt
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@unique([tenantId, eventId, consumerName])
+  @@unique([eventId, consumerName])
   @@index([tenantId, status])
   @@index([tenantId, eventId])
   @@map("domain_inbox_events")
