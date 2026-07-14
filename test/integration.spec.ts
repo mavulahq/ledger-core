@@ -12,6 +12,7 @@ import { SchemasController } from '../src/controllers/schemas.controller';
 import { WorkflowsController } from '../src/controllers/workflows.controller';
 import { ProductType } from '../src/products/product-config.service';
 import { RulesEngineService, RuleType } from '../src/rules-engine/rules-engine.service';
+import { PrismaService } from '../src/services/prisma.service';
 
 describe('fengine - Integration Tests (app composition)', () => {
   let app: INestApplication;
@@ -49,6 +50,16 @@ describe('fengine - Integration Tests (app composition)', () => {
     rulesEngine = app.get(RulesEngineService);
     schemasController = app.get(SchemasController);
     workflowsController = app.get(WorkflowsController);
+
+    const prisma = app.get(PrismaService);
+    await prisma.bindTenantReference({
+      tenantId,
+      institutionId: 'test_institution_001',
+    });
+    await prisma.bindTenantReference({
+      tenantId: 'test_inst_002',
+      institutionId: 'test_institution_002',
+    });
   });
 
   afterAll(async () => {
