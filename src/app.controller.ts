@@ -5,10 +5,12 @@
  */
 
 import { Controller, Get, Req } from '@nestjs/common';
+import { Public } from './auth/public.decorator';
 
 @Controller()
 export class AppController {
   @Get('health')
+  @Public()
   health(@Req() req: any) {
     return { status: 'ok', tenant: req.tenantId || null };
   }

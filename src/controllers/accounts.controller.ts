@@ -6,20 +6,22 @@
 
 import { Controller, Get, Post, Body, Req } from '@nestjs/common';
 import { AccountsService } from '../services/accounts.service';
+import { RequirePermissions } from '../auth/permissions.decorator';
+import { CreateAccountV1Dto } from '../dto/public.dto';
 
 @Controller('accounts')
 export class AccountsController {
   constructor(private svc: AccountsService) {}
 
   @Get()
+  @RequirePermissions('finance.read')
   async list(@Req() req: any) {
-    const tenant = req.tenantId || 'public';
-    return this.svc.listAccounts(tenant);
+    return this.svc.listAccounts(req.tenantId);
   }
 
   @Post()
-  async create(@Req() req: any, @Body() body: any) {
-    const tenant = req.tenantId || 'public';
-    return this.svc.createAccount(tenant, body);
+  @RequirePermissions('finance.write')
+  async create(@Req() req: any, @Body() body: CreateAccountV1Dto) {
+    return this.svc.createAccount(req.tenantId, body);
   }
 }

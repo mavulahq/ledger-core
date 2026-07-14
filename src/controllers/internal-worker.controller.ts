@@ -1,13 +1,13 @@
-import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Post } from '@nestjs/common';
 import { DomainOutboxPublisherService } from '../domain-events/domain-outbox-publisher.service';
 import { ReadProjectionService } from '../read-models/read-projection.service';
 import { EngineEventService } from '../worker/engine-event.service';
-import { InternalApiKeyGuard } from '../worker/internal-api-key.guard';
+import { RequirePermissions } from '../auth/permissions.decorator';
 import { WorkerQueueService } from '../worker/worker-queue.service';
 import { DomainEventWorkerCallback, EngineEventCallback, EnqueueEngineEventInput } from '../worker/worker.types';
 
 @Controller('internal/worker')
-@UseGuards(InternalApiKeyGuard)
+@RequirePermissions('internal.worker')
 export class InternalWorkerController {
   constructor(
     private readonly queue: WorkerQueueService,

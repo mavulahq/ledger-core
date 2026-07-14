@@ -38,8 +38,10 @@ jobs:
     env:
       DATABASE_URL: postgresql://mavula:mavula_dev@127.0.0.1:5432/mavula?schema=public
       REDIS_URL: redis://127.0.0.1:6379
-      INTERNAL_API_KEY: guardian-internal-api-key
-      JWT_SECRET: guardian-jwt-secret
+      OIDC_ISSUER: https://identity.example.test
+      OIDC_AUTHORIZATION_ENDPOINT: https://identity.example.test/auth
+      OIDC_AUDIENCE: urn:mavula:ledger-core
+      OIDC_JWKS_URI: https://identity.example.test/jwks
     steps:
       - uses: actions/checkout@v6
       - name: Setup pnpm

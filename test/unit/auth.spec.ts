@@ -1,10 +1,11 @@
-import { AuthService } from '../../src/auth/auth.service';
+import { GoneException } from '@nestjs/common';
+import { AuthController } from '../../src/auth/auth.controller';
 
-describe('AuthService', () => {
-  it('signs token', async () => {
-    const svc = new AuthService({ sign: () => 'test-token' } as any);
-    const out = await svc.login({ id: 'u', roles: ['USER'] } as any);
-    expect(out).toHaveProperty('access_token');
-    expect(out.access_token).toBe('test-token');
+describe('AuthController', () => {
+  it('does not issue local tokens', () => {
+    process.env.OIDC_ISSUER = 'https://identity.mavula.io';
+    process.env.OIDC_AUTHORIZATION_ENDPOINT = 'https://identity.mavula.io/auth';
+    const controller = new AuthController();
+    expect(() => controller.login()).toThrow(GoneException);
   });
 });

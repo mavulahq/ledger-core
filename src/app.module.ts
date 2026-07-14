@@ -5,6 +5,7 @@
  */
 
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -33,7 +34,8 @@ import { RulesEngineService } from './rules-engine/rules-engine.service';
 import { SchemaManagerService } from './schema-manager/schema-manager.service';
 import { TransactionService } from './transactions/transaction.service';
 import { EngineEventService } from './worker/engine-event.service';
-import { InternalApiKeyGuard } from './worker/internal-api-key.guard';
+import { AccessTokenGuard } from './auth/access-token.guard';
+import { PermissionsGuard } from './auth/permissions.guard';
 import { WorkerQueueService } from './worker/worker-queue.service';
 
 @Module({
@@ -69,7 +71,8 @@ import { WorkerQueueService } from './worker/worker-queue.service';
     DomainOutboxService,
     DomainInboxService,
     DomainOutboxPublisherService,
-    InternalApiKeyGuard,
+    { provide: APP_GUARD, useClass: AccessTokenGuard },
+    { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
 })
 export class AppModule {}

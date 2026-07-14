@@ -12,8 +12,6 @@ import { SchemasController } from '../src/controllers/schemas.controller';
 import { WorkflowsController } from '../src/controllers/workflows.controller';
 import { ProductType } from '../src/products/product-config.service';
 import { RulesEngineService, RuleType } from '../src/rules-engine/rules-engine.service';
-import { TenantMiddleware } from '../src/middleware/tenant.middleware';
-import { exposeCsrfToken } from '../src/middleware/csrf.middleware';
 
 describe('fengine - Integration Tests (app composition)', () => {
   let app: INestApplication;
@@ -30,6 +28,9 @@ describe('fengine - Integration Tests (app composition)', () => {
   const tenantId = 'test_inst_001';
 
   beforeAll(async () => {
+    process.env.OIDC_ISSUER = 'https://identity.mavula.io';
+    process.env.OIDC_AUDIENCE = 'urn:mavula:ledger-core';
+    process.env.OIDC_JWKS_URI = 'https://identity.mavula.io/jwks';
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -68,47 +69,15 @@ describe('fengine - Integration Tests (app composition)', () => {
   });
 
   describe('Authentication', () => {
-    it('login returns token in default mode', async () => {
-      const res = await authController.login(
-        { username: 'testuser', roles: ['USER'] },
-        { cookie: jest.fn() },
-      );
-      expect(res).toHaveProperty('access_token');
-    });
-
-    it('login sets cookie in cookie mode', async () => {
-      process.env.USE_HTTP_ONLY_COOKIE = 'true';
-      const resMock = { cookie: jest.fn() };
-      const res = await authController.login(
-        { username: 'testuser', roles: ['ADMIN'] },
-        resMock,
-      );
-      expect(res).toEqual({ status: 'ok' });
-      expect(resMock.cookie).toHaveBeenCalled();
-      delete process.env.USE_HTTP_ONLY_COOKIE;
-    });
-
-    it('csrf helper returns token when request provides csrfToken', () => {
-      const token = exposeCsrfToken({
-        csrfToken: () => 'test-csrf-token',
-      } as any);
-      expect(token).toBe('test-csrf-token');
+    it('legacy login is retired without issuing a token', () => {
+      expect(() => authController.login()).toThrow('Local login has been retired');
     });
   });
 
   describe('Tenant Isolation', () => {
-    it('Tenant ID extracted from X-Tenant-ID header', () => {
-      const req: any = { headers: { 'x-tenant-id': tenantId }, query: {} };
-      const res: any = {};
-      new TenantMiddleware().use(req, res, jest.fn());
-      expect(req.tenantId).toBe(tenantId);
-    });
-
-    it('Tenant ID extracted from query param', () => {
-      const req: any = { headers: {}, query: { tenant_id: tenantId } };
-      const res: any = {};
-      new TenantMiddleware().use(req, res, jest.fn());
-      expect(req.tenantId).toBe(tenantId);
+    it('controllers require the tenant supplied by the authenticated request context', async () => {
+      const accounts = await accountsController.list({ tenantId });
+      expect(Array.isArray(accounts)).toBe(true);
     });
   });
 

@@ -345,6 +345,7 @@ describe('Financial engine loan lifecycle integration', () => {
     };
 
     const ruleResults = await rulesEngine.evaluateRules(productId, {
+      tenant_id: tenantId,
       customer_id: customerId,
       customer_credit_score: customerCredit.credit_score,
       customer_income: customerCredit.income,

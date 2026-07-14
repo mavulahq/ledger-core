@@ -1,4 +1,3 @@
-import { InternalApiKeyGuard } from '../../src/worker/internal-api-key.guard';
 import { DomainEventFactory } from '../../src/domain-events/domain-event-factory.service';
 import { DomainInboxService } from '../../src/domain-events/domain-inbox.service';
 import { DomainOutboxPublisherService } from '../../src/domain-events/domain-outbox-publisher.service';
@@ -9,15 +8,13 @@ import { ProductSchema, ProductType } from '../../src/products/product-config.se
 import { EngineEventService } from '../../src/worker/engine-event.service';
 import { WorkerQueueService } from '../../src/worker/worker-queue.service';
 
-describe('fengine worker communication', () => {
+describe('ledger-core worker communication', () => {
   beforeEach(() => {
     process.env.FENGINE_QUEUE_BACKEND = 'memory';
-    process.env.INTERNAL_API_KEY = 'test-internal-key';
   });
 
   afterEach(() => {
     delete process.env.FENGINE_QUEUE_BACKEND;
-    delete process.env.INTERNAL_API_KEY;
   });
 
   it('publishes idempotent BullMQ-compatible engine jobs', async () => {
@@ -333,21 +330,6 @@ describe('fengine worker communication', () => {
     delete process.env.FENGINE_INBOX_PROCESSING_LEASE_MS;
   });
 
-  it('rejects missing or invalid internal API keys', () => {
-    const guard = new InternalApiKeyGuard();
-    const context = (key?: string) =>
-      ({
-        switchToHttp: () => ({
-          getRequest: () => ({
-            headers: key ? { 'x-internal-api-key': key } : {},
-          }),
-        }),
-      }) as any;
-
-    expect(() => guard.canActivate(context())).toThrow('Internal API key is required');
-    expect(() => guard.canActivate(context('invalid-key'))).toThrow('Invalid internal API key');
-    expect(guard.canActivate(context('test-internal-key'))).toBe(true);
-  });
 });
 
 function approvedLoan(): Loan {

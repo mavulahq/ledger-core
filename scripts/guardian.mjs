@@ -26,6 +26,7 @@ function requireText(path, pattern, message) {
 }
 
 function shouldScan(path) {
+  if (!existsSync(path)) return false;
   if (path === "scripts/guardian.mjs") return false;
   if (/\.(png|jpg|jpeg|webp|gif|ico|pdf|zip|gz|tgz)$/i.test(path)) return false;
   return true;
@@ -47,6 +48,9 @@ if (pkg.author !== "EstandarMustaq <estandarmustaq@mavula.io>") {
   "README.md",
   "prisma/schema.prisma",
   "scripts/check-no-console.js",
+  "src/auth/access-token.guard.ts",
+  "src/auth/permissions.guard.ts",
+  "src/auth/public.decorator.ts",
 ].forEach(requireFile);
 
 requireText("LICENSE", /SPDX-License-Identifier: AGPL-3\.0-only/, "LICENSE must declare AGPL SPDX");
@@ -58,7 +62,7 @@ for (const file of tracked.stdout.split("\n").filter(Boolean)) {
   if (/(^|\/)\.env($|\.(?!example$))/.test(file)) fail(`${file} must not be tracked`);
   if (shouldScan(file)) {
     const content = read(file);
-    if (/getfluxo-io|@getfluxo|\bgetfluxo\b|packages\/fengine|packages\/fwk|packages\/fpay|packages\/finfra/.test(content)) {
+    if (/getfluxo-io|@getfluxo|\bgetfluxo\b|packages\/fengine|packages\/fwk|packages\/fpay|packages\/finfra|JWT_SECRET|INTERNAL_API_KEY/.test(content)) {
       fail(`${file} contains legacy public identifiers`);
     }
   }

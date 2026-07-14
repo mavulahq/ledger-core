@@ -545,15 +545,18 @@ export class FengineStoreService {
     }));
   }
 
-  async deleteRule(productId: string, ruleId: string): Promise<void> {
+  async deleteRule(tenantId: string, productId: string, ruleId: string): Promise<void> {
     if (!this.prisma.isConfigured) {
       const rules = this.rules.get(productId);
-      rules?.delete(ruleId);
+      const existing = rules?.get(ruleId);
+      if (existing?.tenant_id === tenantId) rules?.delete(ruleId);
       return;
     }
 
+    await this.enterTenant(tenantId);
     await this.prisma.db.$executeRaw`
-      DELETE FROM "rules" WHERE "productId" = ${productId} AND "id" = ${ruleId}
+      DELETE FROM "rules"
+      WHERE "tenantId" = ${tenantId} AND "productId" = ${productId} AND "id" = ${ruleId}
     `;
   }
 

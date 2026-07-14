@@ -1,7 +1,10 @@
 import { Body, Controller, Get, NotFoundException, Param, Post, Req } from '@nestjs/common';
 import { SchemaManagerService } from '../schema-manager/schema-manager.service';
+import { RequirePermissions } from '../auth/permissions.decorator';
+import { CreateSchemaV1Dto } from '../dto/public.dto';
 
 @Controller('schemas')
+@RequirePermissions('finance.read')
 export class SchemasController {
   constructor(private readonly schemas: SchemaManagerService) {}
 
@@ -25,21 +28,24 @@ export class SchemasController {
   }
 
   @Post()
-  async create(@Req() req: any, @Body() body: any) {
+  @RequirePermissions('configuration.write')
+  async create(@Req() req: any, @Body() body: CreateSchemaV1Dto) {
     return this.schemas.createEntitySchema(this.tenant(req), body);
   }
 
   @Post('import')
-  async import(@Req() req: any, @Body() body: any) {
+  @RequirePermissions('configuration.write')
+  async import(@Req() req: any, @Body() body: CreateSchemaV1Dto) {
     return this.schemas.importSchema(this.tenant(req), body);
   }
 
   @Post('presets/business-registration')
+  @RequirePermissions('configuration.write')
   async createBusinessRegistration(@Req() req: any) {
     return this.schemas.createBusinessRegistrationSchema(this.tenant(req));
   }
 
   private tenant(req: any): string {
-    return req.tenantId || 'public';
+    return req.tenantId;
   }
 }

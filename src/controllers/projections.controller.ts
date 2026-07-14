@@ -1,8 +1,10 @@
 import { Controller, Get, NotFoundException, Param, Req } from '@nestjs/common';
 import { ReadProjectionService } from '../read-models/read-projection.service';
 import { ReadProjectionName } from '../read-models/read-projection.types';
+import { RequirePermissions } from '../auth/permissions.decorator';
 
 @Controller('projections')
+@RequirePermissions('finance.read')
 export class ProjectionsController {
   constructor(private readonly projections: ReadProjectionService) {}
 
@@ -57,6 +59,6 @@ export class ProjectionsController {
   }
 
   private tenant(req: any): string {
-    return req.tenantId || 'public';
+    return req.tenantId;
   }
 }
