@@ -15,6 +15,7 @@ export interface AuthenticatedTenantReference {
 @Injectable()
 export class PrismaService implements OnModuleInit, OnModuleDestroy {
   private readonly client?: PrismaClient;
+  private readonly pendingTransactions = new Set<Promise<unknown>>();
 
   constructor() {
     if (process.env.DATABASE_URL) {
@@ -57,10 +58,16 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
       throw new Error('Prisma client not configured');
     }
 
-    return this.client.$transaction(async (tx) => {
+    const transaction = this.client.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
       return operation(tx);
     });
+    this.pendingTransactions.add(transaction);
+    try {
+      return await transaction;
+    } finally {
+      this.pendingTransactions.delete(transaction);
+    }
   }
 
   async pendingOutboxTenantIds(limit: number): Promise<string[]> {
@@ -93,6 +100,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   async onModuleDestroy() {
     if (!this.client) {
       return;
+    }
+
+    while (this.pendingTransactions.size > 0) {
+      await Promise.allSettled([...this.pendingTransactions]);
     }
 
     await this.client.$disconnect();
