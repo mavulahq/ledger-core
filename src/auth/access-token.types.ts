@@ -9,11 +9,3 @@ export interface AccessTokenClaims extends JWTPayload {
   permissions: string[];
   client_id?: string;
 }
-
-declare module 'express-serve-static-core' {
-  interface Request {
-    identity?: AccessTokenClaims;
-    tenantId?: string;
-    institutionId?: string;
-  }
-}
