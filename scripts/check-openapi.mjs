@@ -25,6 +25,19 @@ const expected = [
 for (const route of expected) if (!paths.has(route)) throw new Error(`OpenAPI route missing: ${route}`);
 for (const route of paths) if (/\/internal\/|\/health$|\/metrics$|\/auth\//.test(route)) throw new Error(`Internal route exposed: ${route}`);
 
+const operationIds = [...source.matchAll(/operationId: (\S+)/g)].map((match) => match[1]);
+const summaries = [...source.matchAll(/summary: ([^,}\n]+)/g)];
+const permissions = [...source.matchAll(/x-mavula-permissions:/g)];
+if (new Set(operationIds).size !== operationIds.length || operationIds.length !== expected.length + 7) {
+  throw new Error('Ledger Core OpenAPI operationId coverage is incomplete or duplicated');
+}
+if (summaries.length !== operationIds.length || permissions.length !== operationIds.length) {
+  throw new Error('Every Ledger Core operation must declare summary and permission metadata');
+}
+for (const schema of ['Account', 'AccountStatementPage', 'AccountLifecycleRequest', 'FinancialAdjustmentRequest', 'Product', 'Rule', 'EntitySchema', 'Workflow', 'Projection']) {
+  if (!source.includes(`    ${schema}:`)) throw new Error(`OpenAPI schema missing: ${schema}`);
+}
+
 const controllers = [
   'accounts', 'account-lifecycle', 'financial-adjustments', 'products', 'rules', 'schemas', 'workflows',
 ];
