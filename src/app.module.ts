@@ -44,6 +44,7 @@ import { WorkerQueueService } from './worker/worker-queue.service';
 import { IdempotencyService } from './idempotency/idempotency.service';
 import { IdempotencyInterceptor } from './idempotency/idempotency.interceptor';
 import { HttpMetricsInterceptor } from './metrics/http-metrics.interceptor';
+import { RegulatoryExportSourceService } from './regulatory/regulatory-export-source.service';
 
 @Module({
   imports: [AuthModule],
@@ -81,6 +82,7 @@ import { HttpMetricsInterceptor } from './metrics/http-metrics.interceptor';
     DomainOutboxService,
     DomainInboxService,
     DomainOutboxPublisherService,
+    RegulatoryExportSourceService,
     IdempotencyService,
     { provide: APP_GUARD, useClass: AccessTokenGuard },
     { provide: APP_GUARD, useClass: TenantBoundaryGuard },
