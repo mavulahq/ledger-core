@@ -78,7 +78,7 @@ export class RegulatoryExportSourceService {
       if ('record' in mapped) records.push(mapped.record);
       else rejections.push(mapped.rejection);
     }
-    const last = selected.at(-1);
+    const last = selected[selected.length - 1];
     return {
       records,
       rejections: rejections.sort((left, right) => left.transaction_id.localeCompare(right.transaction_id)
