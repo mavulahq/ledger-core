@@ -122,8 +122,30 @@ model Tenant {
   domainInbox              DomainInboxEvent[]
   readProjections          ReadProjection[]
   projectionCheckpoints    ProjectionCheckpoint[]
+  idempotencyReceipts      IdempotencyReceipt[]
 
   @@map("tenants")
+}
+
+model IdempotencyReceipt {
+  id            String   @id @default(cuid())
+  tenantId      String
+  operation     String
+  keyDigest     String
+  requestHash   String
+  actorId       String
+  correlationId String?
+  httpStatus    Int
+  responseBody  Json
+  completedAt   DateTime @default(now())
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, operation, keyDigest])
+  @@index([expiresAt])
+  @@index([tenantId, completedAt])
+  @@map("idempotency_receipts")
 }
 
 model Product {

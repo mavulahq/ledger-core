@@ -1,0 +1,255 @@
+openapi: 3.1.0
+info:
+  title: MAVULA Ledger Core API
+  version: 1.0.0
+  description: Tenant-scoped accounts, financial controls, configuration and projection APIs.
+  license: { name: GNU Affero General Public License v3.0 only, identifier: AGPL-3.0-only }
+servers:
+  - url: https://ledger.mavula.dev
+security: [{ bearerAuth: [] }]
+paths:
+  /api/accounts:
+    get: { operationId: listAccounts, tags: [Accounts], responses: { '200': { description: Accounts } } }
+    post:
+      operationId: createAccount
+      tags: [Accounts]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Account created }, '400': { $ref: '#/components/responses/BadRequest' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/accounts/{accountId}:
+    get:
+      operationId: getAccount
+      tags: [Accounts]
+      parameters: [{ $ref: '#/components/parameters/AccountId' }]
+      responses: { '200': { description: Account }, '404': { $ref: '#/components/responses/NotFound' } }
+  /api/accounts/{accountId}/balance:
+    get:
+      operationId: getAccountBalance
+      tags: [Accounts]
+      parameters: [{ $ref: '#/components/parameters/AccountId' }]
+      responses: { '200': { description: Account balance } }
+  /api/accounts/{accountId}/statement:
+    get:
+      operationId: getAccountStatement
+      tags: [Accounts]
+      parameters:
+        - { $ref: '#/components/parameters/AccountId' }
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+        - { in: query, name: cursor, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100 } }
+      responses: { '200': { description: Paginated statement } }
+  /api/accounts/{accountId}/status-transitions:
+    post:
+      operationId: submitAccountStatusTransition
+      tags: [Account lifecycle]
+      parameters: [{ $ref: '#/components/parameters/AccountId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Lifecycle request submitted }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/account-lifecycle-requests:
+    get: { operationId: listAccountLifecycleRequests, tags: [Account lifecycle], responses: { '200': { description: Lifecycle requests } } }
+  /api/account-lifecycle-requests/{requestId}:
+    get:
+      operationId: getAccountLifecycleRequest
+      tags: [Account lifecycle]
+      parameters: [{ $ref: '#/components/parameters/RequestId' }]
+      responses: { '200': { description: Lifecycle request }, '404': { $ref: '#/components/responses/NotFound' } }
+  /api/account-lifecycle-requests/{requestId}/approve:
+    post:
+      operationId: approveAccountLifecycleRequest
+      tags: [Account lifecycle]
+      parameters: [{ $ref: '#/components/parameters/RequestId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Lifecycle request approved }, '403': { $ref: '#/components/responses/Forbidden' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/account-lifecycle-requests/{requestId}/reject:
+    post:
+      operationId: rejectAccountLifecycleRequest
+      tags: [Account lifecycle]
+      parameters: [{ $ref: '#/components/parameters/RequestId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Lifecycle request rejected }, '403': { $ref: '#/components/responses/Forbidden' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/financial-adjustment-requests:
+    get: { operationId: listFinancialAdjustmentRequests, tags: [Financial adjustments], responses: { '200': { description: Adjustment requests } } }
+    post:
+      operationId: submitFinancialAdjustmentRequest
+      tags: [Financial adjustments]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Adjustment request submitted }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/financial-adjustment-requests/{requestId}:
+    get:
+      operationId: getFinancialAdjustmentRequest
+      tags: [Financial adjustments]
+      parameters: [{ $ref: '#/components/parameters/RequestId' }]
+      responses: { '200': { description: Adjustment request }, '404': { $ref: '#/components/responses/NotFound' } }
+  /api/financial-adjustment-requests/{requestId}/approve:
+    post:
+      operationId: approveFinancialAdjustmentRequest
+      tags: [Financial adjustments]
+      parameters: [{ $ref: '#/components/parameters/RequestId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Adjustment applied }, '403': { $ref: '#/components/responses/Forbidden' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/financial-adjustment-requests/{requestId}/reject:
+    post:
+      operationId: rejectFinancialAdjustmentRequest
+      tags: [Financial adjustments]
+      parameters: [{ $ref: '#/components/parameters/RequestId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Adjustment rejected }, '403': { $ref: '#/components/responses/Forbidden' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/products:
+    get: { operationId: listProducts, tags: [Configuration], responses: { '200': { description: Products } } }
+    post:
+      operationId: upsertProduct
+      tags: [Configuration]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Product configuration stored }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/products/config:
+    get: { operationId: getProductConfiguration, tags: [Configuration], responses: { '200': { description: Tenant product configuration } } }
+  /api/products/config/generate:
+    post:
+      operationId: generateProductConfiguration
+      tags: [Configuration]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Configuration generated }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/products/{productId}:
+    get:
+      operationId: getProduct
+      tags: [Configuration]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }]
+      responses: { '200': { description: Product }, '404': { $ref: '#/components/responses/NotFound' } }
+  /api/products/{productId}/rules:
+    get:
+      operationId: listRules
+      tags: [Rules]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }]
+      responses: { '200': { description: Rules } }
+    post:
+      operationId: createRule
+      tags: [Rules]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Rule created }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/products/{productId}/rules/defaults:
+    post:
+      operationId: seedDefaultRules
+      tags: [Rules]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      responses: { '201': { description: Default rules created }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/products/{productId}/rules/{ruleId}:
+    put:
+      operationId: updateRule
+      tags: [Rules]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { in: path, name: ruleId, required: true, schema: { type: string } }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '200': { description: Rule updated }, '409': { $ref: '#/components/responses/Conflict' } }
+    delete:
+      operationId: deleteRule
+      tags: [Rules]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { in: path, name: ruleId, required: true, schema: { type: string } }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      responses: { '200': { description: Rule deleted }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/schemas:
+    get: { operationId: listSchemas, tags: [Schemas], responses: { '200': { description: Schemas } } }
+    post:
+      operationId: createSchema
+      tags: [Schemas]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Schema created }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/schemas/import:
+    post:
+      operationId: importSchema
+      tags: [Schemas]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Schema imported }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/schemas/presets/business-registration:
+    post:
+      operationId: createBusinessRegistrationSchema
+      tags: [Schemas]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses: { '201': { description: Preset schema created }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/schemas/{schemaId}:
+    get:
+      operationId: getSchema
+      tags: [Schemas]
+      parameters: [{ in: path, name: schemaId, required: true, schema: { type: string } }]
+      responses: { '200': { description: Schema }, '404': { $ref: '#/components/responses/NotFound' } }
+  /api/schemas/{schemaId}/export:
+    get:
+      operationId: exportSchema
+      tags: [Schemas]
+      parameters: [{ in: path, name: schemaId, required: true, schema: { type: string } }]
+      responses: { '200': { description: Portable schema definition } }
+  /api/workflows:
+    get: { operationId: listWorkflows, tags: [Workflows], responses: { '200': { description: Workflows } } }
+    post:
+      operationId: createWorkflow
+      tags: [Workflows]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Workflow created }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/workflows/trigger/{trigger}:
+    get:
+      operationId: listWorkflowsByTrigger
+      tags: [Workflows]
+      parameters: [{ in: path, name: trigger, required: true, schema: { type: string } }]
+      responses: { '200': { description: Matching workflows } }
+  /api/workflows/presets/loan-approval-notification:
+    post:
+      operationId: createLoanApprovalNotificationWorkflow
+      tags: [Workflows]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses: { '201': { description: Preset workflow created }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/workflows/presets/monthly-fee-charge:
+    post:
+      operationId: createMonthlyFeeChargeWorkflow
+      tags: [Workflows]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses: { '201': { description: Preset workflow created }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/workflows/{workflowId}:
+    get:
+      operationId: getWorkflow
+      tags: [Workflows]
+      parameters: [{ in: path, name: workflowId, required: true, schema: { type: string } }]
+      responses: { '200': { description: Workflow }, '404': { $ref: '#/components/responses/NotFound' } }
+  /api/workflows/{workflowId}/execute:
+    post:
+      operationId: executeWorkflow
+      tags: [Workflows]
+      parameters: [{ in: path, name: workflowId, required: true, schema: { type: string } }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
+      responses: { '201': { description: Workflow execution completed }, '409': { $ref: '#/components/responses/Conflict' } }
+  /api/projections/status:
+    get: { operationId: getProjectionStatus, tags: [Projections], responses: { '200': { description: Projection checkpoints } } }
+  /api/projections/loan-activity:
+    get: { operationId: listLoanActivity, tags: [Projections], responses: { '200': { description: Loan activity projections } } }
+  /api/projections/loan-activity/{loanId}:
+    get: { operationId: getLoanActivity, tags: [Projections], parameters: [{ in: path, name: loanId, required: true, schema: { type: string } }], responses: { '200': { description: Loan activity projection } } }
+  /api/projections/ledger-activity:
+    get: { operationId: listLedgerActivity, tags: [Projections], responses: { '200': { description: Ledger activity projections } } }
+  /api/projections/ledger-activity/{journalEntryId}:
+    get: { operationId: getLedgerActivity, tags: [Projections], parameters: [{ in: path, name: journalEntryId, required: true, schema: { type: string } }], responses: { '200': { description: Ledger activity projection } } }
+  /api/projections/product-publications:
+    get: { operationId: listProductPublications, tags: [Projections], responses: { '200': { description: Product publication projections } } }
+  /api/projections/product-publications/{productId}:
+    get: { operationId: getProductPublication, tags: [Projections], parameters: [{ $ref: '#/components/parameters/ProductId' }], responses: { '200': { description: Product publication projection } } }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    IdempotencyKey: { in: header, name: Idempotency-Key, required: true, schema: { type: string, minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' } }
+    AccountId: { in: path, name: accountId, required: true, schema: { type: string } }
+    ProductId: { in: path, name: productId, required: true, schema: { type: string } }
+    RequestId: { in: path, name: requestId, required: true, schema: { type: string } }
+  requestBodies:
+    JsonObject:
+      required: true
+      content: { application/json: { schema: { type: object, additionalProperties: true } } }
+  responses:
+    BadRequest: { description: Request contract or Idempotency-Key is invalid }
+    Unauthorized: { description: Bearer token is missing or invalid }
+    Forbidden: { description: 'Permission, maker-checker or tenant policy denied the operation' }
+    NotFound: { description: Tenant-scoped resource was not found }
+    Conflict: { description: State conflict or Idempotency-Key reuse conflict }

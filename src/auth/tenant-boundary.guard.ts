@@ -3,6 +3,7 @@ import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../services/prisma.service';
 import { PUBLIC_ROUTE } from './public.decorator';
 import type { AccessTokenClaims } from './access-token.types';
+import { MetricsService } from '../metrics/metrics.service';
 
 @Injectable()
 export class TenantBoundaryGuard implements CanActivate {
@@ -11,6 +12,7 @@ export class TenantBoundaryGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly prisma: PrismaService,
+    private readonly metrics: MetricsService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -21,6 +23,7 @@ export class TenantBoundaryGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const identity = request.identity as AccessTokenClaims | undefined;
     if (!identity) {
+      this.metrics.recordSecurityFailure('tenant', 'missing_identity');
       throw new ForbiddenException('Authenticated tenant context is required');
     }
 
@@ -31,6 +34,7 @@ export class TenantBoundaryGuard implements CanActivate {
       });
       return true;
     } catch {
+      this.metrics.recordSecurityFailure('tenant', 'binding_mismatch');
       this.logger.warn(JSON.stringify({
         event: 'tenant_boundary_denied',
         tenant_id: identity.tenant_id,

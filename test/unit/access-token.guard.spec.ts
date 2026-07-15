@@ -32,7 +32,7 @@ describe('AccessTokenGuard', () => {
     process.env.OIDC_JWKS_URI = jwksUri;
     const token = await accessToken();
     const request: any = { headers: { authorization: `Bearer ${token}`, 'x-tenant-id': 'tenant-1' } };
-    const guard = new AccessTokenGuard(new Reflector());
+    const guard = new AccessTokenGuard(new Reflector(), { recordSecurityFailure: jest.fn() } as any);
     await expect(guard.canActivate(context(request))).resolves.toBe(true);
     expect(request.tenantId).toBe('tenant-1');
     expect(request.identity.permissions).toContain('finance.read');
@@ -45,7 +45,7 @@ describe('AccessTokenGuard', () => {
     const request = {
       headers: { authorization: `Bearer ${await accessToken()}`, 'x-tenant-id': 'tenant-2' },
     };
-    const guard = new AccessTokenGuard(new Reflector());
+    const guard = new AccessTokenGuard(new Reflector(), { recordSecurityFailure: jest.fn() } as any);
     await expect(guard.canActivate(context(request))).rejects.toThrow('does not match');
   });
 

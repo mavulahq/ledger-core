@@ -10,13 +10,19 @@ import {
   FinancialAdjustmentListQueryV1Dto,
   RejectFinancialAdjustmentV1Dto,
 } from '../dto/public.dto';
+import { IdempotentOperation } from '../idempotency/idempotent-operation.decorator';
+import { MetricsService } from '../metrics/metrics.service';
 
 @Controller('financial-adjustment-requests')
 export class FinancialAdjustmentsController {
-  constructor(private readonly adjustments: FinancialAdjustmentsService) {}
+  constructor(
+    private readonly adjustments: FinancialAdjustmentsService,
+    private readonly metrics?: MetricsService,
+  ) {}
 
   @Post()
   @RequirePermissions('finance.write')
+  @IdempotentOperation('financial-adjustments.submit')
   async submit(@Req() req: any, @Body() body: CreateFinancialAdjustmentV1Dto) {
     const correction = body.correction ? {
       lending: body.correction.lending ? {
@@ -39,13 +45,15 @@ export class FinancialAdjustmentsController {
         })),
       } : undefined,
     } : undefined;
-    return this.publicRequest(await this.adjustments.submit(req.tenantId, {
+    const request = await this.adjustments.submit(req.tenantId, {
       targetType: body.target_type,
       targetId: body.target_id,
       adjustmentType: body.adjustment_type,
       reason: body.reason,
       correction,
-    }, this.actor(req)));
+    }, this.actor(req));
+    this.metrics?.recordAdjustment(request.adjustmentType, 'requested');
+    return this.publicRequest(request);
   }
 
   @Get()
@@ -70,22 +78,28 @@ export class FinancialAdjustmentsController {
 
   @Post(':requestId/approve')
   @RequirePermissions('finance.approve')
+  @IdempotentOperation('financial-adjustments.approve')
   async approve(
     @Req() req: any,
     @Param('requestId') requestId: string,
     @Body() body: ApproveFinancialAdjustmentV1Dto,
   ) {
-    return this.publicRequest(await this.adjustments.approve(req.tenantId, requestId, body.reason, this.actor(req)));
+    const request = await this.adjustments.approve(req.tenantId, requestId, body.reason, this.actor(req));
+    this.metrics?.recordAdjustment(request.adjustmentType, request.status.toLowerCase());
+    return this.publicRequest(request);
   }
 
   @Post(':requestId/reject')
   @RequirePermissions('finance.approve')
+  @IdempotentOperation('financial-adjustments.reject')
   async reject(
     @Req() req: any,
     @Param('requestId') requestId: string,
     @Body() body: RejectFinancialAdjustmentV1Dto,
   ) {
-    return this.publicRequest(await this.adjustments.reject(req.tenantId, requestId, body.reason, this.actor(req)));
+    const request = await this.adjustments.reject(req.tenantId, requestId, body.reason, this.actor(req));
+    this.metrics?.recordAdjustment(request.adjustmentType, request.status.toLowerCase());
+    return this.publicRequest(request);
   }
 
   private actor(req: any): OperatorContext {
