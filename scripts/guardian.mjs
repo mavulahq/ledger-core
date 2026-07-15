@@ -51,6 +51,7 @@ if (pkg.author !== "EstandarMustaq <estandarmustaq@mavula.io>") {
   "prisma/migrations/20260714000100_baseline/migration.sql",
   "prisma/migrations/20260714000200_transactional_tenant_rls/migration.sql",
   "prisma/migrations/20260715000100_controlled_account_lifecycle/migration.sql",
+  "prisma/migrations/20260715000200_financial_adjustments_audit_stage/migration.sql",
   "scripts/check-no-console.js",
   "scripts/migrate-database.mjs",
   "scripts/provision-database-role.mjs",
@@ -84,6 +85,13 @@ for (const file of tracked.stdout.split("\n").filter(Boolean)) {
       /UPDATE\s+["']?accounts["']?[\s\S]{0,200}\bSET\b[\s\S]{0,200}\bbalance\b/i.test(content)
     ) {
       fail(`${file} mutates account balances outside the controlled subledger`);
+    }
+    if (
+      file.startsWith("src/") &&
+      file !== "src/services/audit-trail.service.ts" &&
+      /\bphase\s*:/.test(content)
+    ) {
+      fail(`${file} writes the retired audit phase field`);
     }
   }
 }

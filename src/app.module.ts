@@ -11,6 +11,8 @@ import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { AccountsController } from './controllers/accounts.controller';
 import { AccountLifecycleController } from './controllers/account-lifecycle.controller';
+import { FinancialAdjustmentsController } from './controllers/financial-adjustments.controller';
+import { FinancialAdjustmentsService } from './adjustments/financial-adjustments.service';
 import { ProductsController } from './controllers/products.controller';
 import { ProjectionsController } from './controllers/projections.controller';
 import { RulesController } from './controllers/rules.controller';
@@ -46,6 +48,7 @@ import { WorkerQueueService } from './worker/worker-queue.service';
     AppController,
     AccountsController,
     AccountLifecycleController,
+    FinancialAdjustmentsController,
     ProductsController,
     ProjectionsController,
     RulesController,
@@ -57,6 +60,7 @@ import { WorkerQueueService } from './worker/worker-queue.service';
   providers: [
     AppService,
     AccountsService,
+    FinancialAdjustmentsService,
     PrismaService,
     MetricsService,
     FengineStoreService,

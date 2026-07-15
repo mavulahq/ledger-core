@@ -160,8 +160,19 @@ export class FengineStoreService {
 
     return this.prisma.withTenant(tenantId, async (tx) => {
       await tx.$executeRaw`
-        INSERT INTO "financial_transactions" ("id", "tenantId", "type", "status", "amount", "currency", "loanId", "idempotencyKey", "data", "postedAt")
-        VALUES (${transaction.id}, ${tenantId}, ${transaction.transaction_type}, ${transaction.status}, ${transaction.amount}, ${transaction.currency}, ${transaction.loan_id || null}, ${transaction.idempotency_key || null}, CAST(${this.json(transaction)} AS jsonb), ${transaction.posted_at || null})
+        INSERT INTO "financial_transactions" (
+          "id", "tenantId", "type", "status", "amount", "currency", "loanId",
+          "idempotencyKey", "data", "postedAt", "adjustmentRequestId",
+          "reversalOfTransactionId", "correctionOfTransactionId"
+        )
+        VALUES (
+          ${transaction.id}, ${tenantId}, ${transaction.transaction_type}, ${transaction.status},
+          ${transaction.amount}, ${transaction.currency}, ${transaction.loan_id || null},
+          ${transaction.idempotency_key || null}, CAST(${this.json(transaction)} AS jsonb),
+          ${transaction.posted_at || null}, ${transaction.adjustment_request_id || null},
+          ${transaction.reversal_of_transaction_id || null},
+          ${transaction.correction_of_transaction_id || null}
+        )
         ON CONFLICT ("tenantId", "id") DO UPDATE SET
           "status" = EXCLUDED."status",
           "amount" = EXCLUDED."amount",
@@ -202,6 +213,20 @@ export class FengineStoreService {
         SELECT "data" FROM "financial_transactions" WHERE "tenantId" = ${tenantId} ORDER BY "createdAt" ASC
       `;
       return rows.map((row) => this.fromJson<Transaction>(row.data));
+    });
+  }
+
+  async getTransaction(tenantId: string, transactionId: string): Promise<Transaction | undefined> {
+    if (!this.prisma.isConfigured) {
+      return this.transactions.get(tenantId)?.get(transactionId);
+    }
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const [row] = await tx.$queryRaw<any[]>`
+        SELECT "data" FROM "financial_transactions"
+        WHERE "tenantId" = ${tenantId} AND id = ${transactionId}
+        LIMIT 1
+      `;
+      return row ? this.fromJson<Transaction>(row.data) : undefined;
     });
   }
 
@@ -303,8 +328,18 @@ export class FengineStoreService {
 
     return this.prisma.withTenant(tenantId, async (tx) => {
       await tx.$executeRaw`
-        INSERT INTO "journal_entries" ("id", "tenantId", "transactionId", "description", "postedBy", "status", "entryDate", "postingDate", "lines", "metadata")
-        VALUES (${entry.entry_id}, ${tenantId}, ${entry.transaction_id}, ${entry.description}, ${entry.posted_by}, ${entry.status}, ${entry.entry_date}, ${entry.posting_date}, CAST(${this.json(entry.entries)} AS jsonb), CAST(${this.json(entry.metadata)} AS jsonb))
+        INSERT INTO "journal_entries" (
+          "id", "tenantId", "transactionId", "description", "postedBy", "status",
+          "entryDate", "postingDate", "lines", "metadata", "adjustmentRequestId",
+          "reversalOfEntryId", "correctionOfEntryId"
+        )
+        VALUES (
+          ${entry.entry_id}, ${tenantId}, ${entry.transaction_id}, ${entry.description},
+          ${entry.posted_by}, ${entry.status}, ${entry.entry_date}, ${entry.posting_date},
+          CAST(${this.json(entry.entries)} AS jsonb), CAST(${this.json(entry.metadata)} AS jsonb),
+          ${entry.adjustment_request_id || null}, ${entry.reversal_of_entry_id || null},
+          ${entry.correction_of_entry_id || null}
+        )
         ON CONFLICT ("tenantId", "id") DO UPDATE SET
           "transactionId" = EXCLUDED."transactionId",
           "description" = EXCLUDED."description",
@@ -338,7 +373,37 @@ export class FengineStoreService {
         entries: this.fromJson(row.lines),
         status: row.status as JournalEntry['status'],
         metadata: this.fromJson(row.metadata),
+        adjustment_request_id: row.adjustmentRequestId || undefined,
+        reversal_of_entry_id: row.reversalOfEntryId || undefined,
+        correction_of_entry_id: row.correctionOfEntryId || undefined,
       }));
+    });
+  }
+
+  async getJournalEntry(tenantId: string, entryId: string): Promise<JournalEntry | undefined> {
+    if (!this.prisma.isConfigured) {
+      return this.journalEntries.get(tenantId)?.get(entryId);
+    }
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const [row] = await tx.$queryRaw<any[]>`
+        SELECT * FROM "journal_entries"
+        WHERE "tenantId" = ${tenantId} AND id = ${entryId}
+        LIMIT 1
+      `;
+      return row ? {
+        entry_id: row.id,
+        entry_date: row.entryDate,
+        transaction_id: row.transactionId,
+        description: row.description,
+        posted_by: row.postedBy,
+        posting_date: row.postingDate,
+        entries: this.fromJson(row.lines),
+        status: row.status as JournalEntry['status'],
+        metadata: this.fromJson(row.metadata),
+        adjustment_request_id: row.adjustmentRequestId || undefined,
+        reversal_of_entry_id: row.reversalOfEntryId || undefined,
+        correction_of_entry_id: row.correctionOfEntryId || undefined,
+      } : undefined;
     });
   }
 

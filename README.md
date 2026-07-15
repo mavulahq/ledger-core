@@ -12,6 +12,8 @@ Legacy alias: `fengine`.
 - Transactional Outbox/Inbox and read projections for active domain events.
 - Controlled account lifecycle with maker-checker approval and an immutable,
   journal-backed customer-account subledger.
+- Controlled financial reversals and corrections for ledger and lending, with
+  immutable originals, maker-checker approval, and transactional domain events.
 
 ## Account lifecycle
 
@@ -24,6 +26,19 @@ or `CLOSE` for approval. A different operator with `finance.approve` decides the
 request through `/api/account-lifecycle-requests/:requestId/approve` or
 `/reject`. Frozen accounts reject debits and closed accounts reject new
 postings.
+
+## Financial adjustments
+
+`POST /api/financial-adjustment-requests` submits a `REVERSAL` or `CORRECTION`
+against a posted transaction or journal entry. A different operator with
+`finance.approve` decides the request through
+`/api/financial-adjustment-requests/:requestId/approve` or `/reject`.
+
+Approval writes the reversal and optional replacement atomically. Loan payment
+and disbursement adjustments are rejected when a later financial effect exists.
+The original transaction and journal remain immutable; audit events and
+`ledger.adjustment_posted` or `lending.adjustment_applied` are written in the
+same transaction.
 
 ## Development
 

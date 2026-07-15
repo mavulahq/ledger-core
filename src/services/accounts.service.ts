@@ -126,8 +126,8 @@ export class AccountsService {
       const accounts = this.memoryAccounts.get(tenantId) || new Map<string, AccountRecord>();
       accounts.set(account.id, account);
       this.memoryAccounts.set(tenantId, accounts);
-      this.auditTrail.record(this.auditEvent(account.tenantId, 'account.created', 'account', account.id, actor, {
-        result: 'CONFIGURED',
+      this.auditTrail.record(this.auditEvent(
+        account.tenantId, 'account.created', 'account', account.id, actor, 'CONFIGURED', 'SUCCEEDED', {
         customer_id: account.customerId,
         product_id: account.productId,
       }));
@@ -150,8 +150,7 @@ export class AccountsService {
       `;
       await this.auditTrail.recordInTransaction(
         tx,
-        this.auditEvent(tenantId, 'account.created', 'account', id, actor, {
-          result: 'CONFIGURED',
+        this.auditEvent(tenantId, 'account.created', 'account', id, actor, 'CONFIGURED', 'SUCCEEDED', {
           customer_id: input.customer_id,
           product_id: input.product_id,
         }),
@@ -188,6 +187,21 @@ export class AccountsService {
       LIMIT ${query.limit + 1}
     `));
     return this.statementResponse(account, rows.map((row) => this.entryFromRow(row)), query.limit);
+  }
+
+  async listEntriesByJournal(tenantId: string, journalEntryId: string): Promise<AccountEntryRecord[]> {
+    if (!this.prisma.isConfigured) {
+      return [...(this.memoryEntries.get(tenantId)?.values() || [])]
+        .flat()
+        .filter((entry) => entry.journalEntryId === journalEntryId)
+        .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
+    }
+    const rows = await this.prisma.withTenant(tenantId, (tx) => tx.$queryRaw<any[]>`
+      SELECT * FROM "account_entries"
+      WHERE "tenantId" = ${tenantId} AND "journalEntryId" = ${journalEntryId}
+      ORDER BY "createdAt" ASC, id ASC
+    `);
+    return rows.map((row) => this.entryFromRow(row));
   }
 
   async submitLifecycleRequest(
@@ -384,7 +398,7 @@ export class AccountsService {
         journalEntryId,
         transactionId: posting.transactionId || transactionId,
         postingKey,
-        entryType: 'POSTING',
+        entryType: posting.entryType || 'POSTING',
         direction: posting.direction,
         amount: amount.toFixed(2),
         currency: posting.currency,
@@ -449,15 +463,16 @@ export class AccountsService {
         )
         VALUES (
           ${id}, ${tenantId}, ${posting.accountId}, ${journalEntryId},
-          ${posting.transactionId || transactionId}, ${postingKey}, 'POSTING',
-          ${posting.direction}, ${amount.toFixed(2)}, ${posting.currency}, ${balance},
+          ${posting.transactionId || transactionId}, ${postingKey}, ${posting.entryType || 'POSTING'},
+          ${posting.direction}, CAST(${amount.toFixed(2)} AS numeric), ${posting.currency},
+          CAST(${balance} AS numeric),
           ${posting.reference || null}, ${postedBy}, ${postedAt}
         )
         RETURNING *
       `;
       await tx.$executeRaw`
         UPDATE "accounts"
-        SET balance = ${balance}, version = version + 1, "updatedAt" = now()
+        SET balance = CAST(${balance} AS numeric), version = version + 1, "updatedAt" = now()
         WHERE "tenantId" = ${tenantId} AND id = ${posting.accountId}
       `;
       created.push(this.entryFromRow(row));
@@ -722,6 +737,9 @@ export class AccountsService {
     if (account.status === 'CLOSED') {
       throw new ConflictException(`Account ${account.id} is closed`);
     }
+    if (posting.entryType === 'REVERSAL' || posting.entryType === 'CORRECTION') {
+      return;
+    }
     if (account.status === 'FROZEN' && posting.direction === 'DEBIT') {
       throw new ConflictException(`Account ${account.id} is frozen for debits`);
     }
@@ -738,6 +756,7 @@ export class AccountsService {
       existing.direction !== posting.direction ||
       existing.amount !== this.amount(posting.amount).toFixed(2) ||
       existing.currency !== posting.currency
+      || existing.entryType !== (posting.entryType || 'POSTING')
     ) {
       throw new ConflictException(`Posting key ${existing.postingKey} is already used by another account entry`);
     }
@@ -844,6 +863,8 @@ export class AccountsService {
     entityType: string,
     entityId: string,
     actor: OperatorContext,
+    stage: 'REQUESTED' | 'AUTHORIZED' | 'CONFIGURED',
+    result: 'PENDING' | 'SUCCEEDED' | 'REJECTED' | 'FAILED',
     metadata: Record<string, any>,
   ) {
     return {
@@ -852,13 +873,16 @@ export class AccountsService {
       entity_type: entityType,
       entity_id: entityId,
       actor_id: actor.subject,
+      actor_roles: actor.roles,
+      institution_id: actor.institutionId,
+      branch_id: actor.branchId,
+      correlation_id: actor.correlationId,
+      stage,
+      result,
+      source: 'API' as const,
       metadata: {
         ...metadata,
-        actor_roles: actor.roles,
-        institution_id: actor.institutionId,
-        branch_id: actor.branchId,
-        correlation_id: actor.correlationId,
-        source: 'ledger-core.accounts',
+        component: 'ledger-core.accounts',
       },
     };
   }
@@ -869,16 +893,32 @@ export class AccountsService {
     action: string,
     result: AccountLifecycleRequestStatus,
   ) {
-    return this.auditEvent(request.tenantId, action, 'account', request.accountId, actor, {
-      result,
-      reason: result === 'REJECTED' ? request.decisionReason : request.reason,
-      approval_reference: request.id,
+    const auditResult = result === 'PENDING_APPROVAL'
+      ? 'PENDING'
+      : result === 'APPLIED'
+        ? 'SUCCEEDED'
+        : result;
+    const reason = result === 'REJECTED' ? request.decisionReason : request.reason;
+    return {
+      ...this.auditEvent(
+        request.tenantId,
+        action,
+        'account',
+        request.accountId,
+        actor,
+        result === 'PENDING_APPROVAL' ? 'REQUESTED' : 'AUTHORIZED',
+        auditResult,
+        {
       transition: request.transition,
       from_status: request.fromStatus,
       target_status: request.targetStatus,
       maker_subject: request.requestedBy,
       checker_subject: request.decidedBy,
-    });
+        },
+      ),
+      reason,
+      approval_reference: request.id,
+    };
   }
 
   private accountFromRow(row: any): AccountRecord {

@@ -15,7 +15,7 @@ export const ACCOUNT_LIFECYCLE_REQUEST_STATUSES = [
 export type AccountLifecycleRequestStatus = (typeof ACCOUNT_LIFECYCLE_REQUEST_STATUSES)[number];
 
 export type AccountEntryDirection = 'DEBIT' | 'CREDIT';
-export type AccountEntryType = 'OPENING_BALANCE' | 'POSTING';
+export type AccountEntryType = 'OPENING_BALANCE' | 'POSTING' | 'REVERSAL' | 'CORRECTION';
 
 export interface OperatorContext {
   subject: string;
@@ -73,6 +73,7 @@ export interface AccountPostingInput {
   reference?: string;
   transactionId?: string;
   postingKey?: string;
+  entryType?: Extract<AccountEntryType, 'REVERSAL' | 'CORRECTION'>;
 }
 
 export interface AccountLifecycleRequestRecord {

@@ -106,6 +106,29 @@ export interface LedgerJournalPostedPayload {
   }>;
 }
 
+export interface LedgerAdjustmentPostedPayload {
+  adjustment_request_id: string;
+  adjustment_type: 'REVERSAL' | 'CORRECTION';
+  target_journal_entry_id: string;
+  reversal_journal_entry_id: string;
+  replacement_journal_entry_id?: string;
+  applied_at: string;
+}
+
+export interface LendingAdjustmentAppliedPayload {
+  adjustment_request_id: string;
+  adjustment_type: 'REVERSAL' | 'CORRECTION';
+  operation: 'LOAN_PAYMENT' | 'LOAN_DISBURSEMENT';
+  original_transaction_id: string;
+  reversal_transaction_id: string;
+  replacement_transaction_id?: string;
+  money: { amount: string; currency: string };
+  allocation?: { principal: string; interest: string; fees: string };
+  balance_after: string;
+  loan_status: string;
+  applied_at: string;
+}
+
 export function assertDomainEventEnvelope(value: any): asserts value is DomainEventEnvelope {
   if (!value || typeof value !== 'object') {
     throw new Error('domain event envelope must be an object');
