@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from './prisma.service';
 
 export interface AuditTrailEvent {
@@ -20,16 +21,17 @@ export class AuditTrailService {
   constructor(private readonly prisma: PrismaService) {}
 
   record(event: Omit<AuditTrailEvent, 'id' | 'created_at'>): AuditTrailEvent {
-    const entry: AuditTrailEvent = {
-      id: `audit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      created_at: new Date(),
-      ...event,
-    };
-
-    const tenantEvents = this.events.get(event.tenant_id) || [];
-    tenantEvents.push(entry);
-    this.events.set(event.tenant_id, tenantEvents);
+    const entry = this.appendMemory(event);
     void this.persist(entry);
+    return entry;
+  }
+
+  async recordInTransaction(
+    tx: Prisma.TransactionClient,
+    event: Omit<AuditTrailEvent, 'id' | 'created_at'>,
+  ): Promise<AuditTrailEvent> {
+    const entry = this.buildEntry(event);
+    await this.persistWithTransaction(tx, entry);
     return entry;
   }
 
@@ -63,9 +65,36 @@ export class AuditTrailService {
       return;
     }
 
-    await this.prisma.withTenant(entry.tenant_id, (tx) => tx.$executeRaw`
+    await this.prisma.withTenant(entry.tenant_id, (tx) => this.persistWithTransaction(tx, entry));
+  }
+
+  private appendMemory(
+    event: Omit<AuditTrailEvent, 'id' | 'created_at'>,
+  ): AuditTrailEvent {
+    const entry = this.buildEntry(event);
+    const tenantEvents = this.events.get(event.tenant_id) || [];
+    tenantEvents.push(entry);
+    this.events.set(event.tenant_id, tenantEvents);
+    return entry;
+  }
+
+  private buildEntry(
+    event: Omit<AuditTrailEvent, 'id' | 'created_at'>,
+  ): AuditTrailEvent {
+    return {
+      id: `audit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      created_at: new Date(),
+      ...event,
+    };
+  }
+
+  private async persistWithTransaction(
+    tx: Prisma.TransactionClient,
+    entry: AuditTrailEvent,
+  ): Promise<void> {
+    await tx.$executeRaw`
         INSERT INTO "audit_trail_events" ("id", "tenantId", "action", "entityType", "entityId", "phase", "actorId", "metadata", "createdAt")
         VALUES (${entry.id}, ${entry.tenant_id}, ${entry.action}, ${entry.entity_type}, ${entry.entity_id}, ${entry.phase || null}, ${entry.actor_id || null}, CAST(${JSON.stringify(entry.metadata)} AS jsonb), ${entry.created_at})
-      `);
+      `;
   }
 }

@@ -1,6 +1,7 @@
 import {
   IsArray,
   IsBoolean,
+  IsDateString,
   IsEnum,
   IsInt,
   IsIn,
@@ -11,6 +12,7 @@ import {
   IsString,
   Matches,
   MaxLength,
+  Max,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -18,8 +20,39 @@ import { Type } from 'class-transformer';
 import { ProductType } from '../products/product-config.service';
 
 export class CreateAccountV1Dto {
+  @IsString() @IsNotEmpty() @MaxLength(128) customer_id!: string;
+  @IsString() @IsNotEmpty() @MaxLength(128) product_id!: string;
   @IsString() @IsNotEmpty() @MaxLength(160) name!: string;
-  @IsOptional() @IsNumber() balance?: number;
+  @IsString() @Matches(/^[A-Z]{3}$/) currency!: string;
+}
+
+export class AccountStatementQueryV1Dto {
+  @IsOptional() @IsDateString() from?: string;
+  @IsOptional() @IsDateString() to?: string;
+  @IsOptional() @IsString() cursor?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit = 50;
+}
+
+export class CreateAccountStatusTransitionV1Dto {
+  @IsIn(['FREEZE', 'UNFREEZE', 'CLOSE'])
+  transition!: 'FREEZE' | 'UNFREEZE' | 'CLOSE';
+  @IsString() @IsNotEmpty() @MaxLength(500) reason!: string;
+}
+
+export class AccountLifecycleListQueryV1Dto {
+  @IsOptional() @IsString() @MaxLength(128) account_id?: string;
+  @IsOptional() @IsIn(['PENDING_APPROVAL', 'APPLIED', 'REJECTED', 'FAILED'])
+  status?: 'PENDING_APPROVAL' | 'APPLIED' | 'REJECTED' | 'FAILED';
+  @IsOptional() @IsString() cursor?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit = 50;
+}
+
+export class ApproveAccountLifecycleV1Dto {
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
+}
+
+export class RejectAccountLifecycleV1Dto {
+  @IsString() @IsNotEmpty() @MaxLength(500) reason!: string;
 }
 
 export class UpsertProductV1Dto {

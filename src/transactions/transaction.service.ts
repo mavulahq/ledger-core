@@ -1,12 +1,7 @@
 /*
- * mavula.io - Transaction Processing & Payment Settlement Engine
- * Copyright (c) 2025 mavula.io
- * 
- * Author: EstandarMustaq <estandarmustaq@mavula.io>
- * License: Proprietary - See LICENSE file
- * 
- * Real-time transaction processing, settlement, reconciliation
- * Multi-currency, dual-ledger (GL + customer account)
+ * mavula.io - Transaction Processing
+ * Copyright (c) 2025-2026 mavula.io
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 import { Injectable } from '@nestjs/common';
@@ -161,8 +156,7 @@ export class TransactionService {
         fee_payment: allocation.fee_payment,
       });
 
-      // Step 6: Update customer account
-      // In production: UPDATE accounts SET balance = balance - principal WHERE id = account_id
+      // Customer-account balances are changed only by journal-backed account postings.
 
       const result: SettlementResult = {
         transaction_id: txnId,

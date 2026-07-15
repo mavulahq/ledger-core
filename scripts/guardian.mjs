@@ -50,6 +50,7 @@ if (pkg.author !== "EstandarMustaq <estandarmustaq@mavula.io>") {
   "prisma/baseline.schema.prisma",
   "prisma/migrations/20260714000100_baseline/migration.sql",
   "prisma/migrations/20260714000200_transactional_tenant_rls/migration.sql",
+  "prisma/migrations/20260715000100_controlled_account_lifecycle/migration.sql",
   "scripts/check-no-console.js",
   "scripts/migrate-database.mjs",
   "scripts/provision-database-role.mjs",
@@ -76,6 +77,13 @@ for (const file of tracked.stdout.split("\n").filter(Boolean)) {
       /prisma\.(db|account)|ensureTenant|setTenantContext|current_tenant_id['"`),\s]*,?\s*['"`]\*/.test(content)
     ) {
       fail(`${file} bypasses the transactional tenant boundary`);
+    }
+    if (
+      file.startsWith("src/") &&
+      file !== "src/services/accounts.service.ts" &&
+      /UPDATE\s+["']?accounts["']?[\s\S]{0,200}\bSET\b[\s\S]{0,200}\bbalance\b/i.test(content)
+    ) {
+      fail(`${file} mutates account balances outside the controlled subledger`);
     }
   }
 }

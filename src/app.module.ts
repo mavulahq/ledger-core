@@ -10,6 +10,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { AccountsController } from './controllers/accounts.controller';
+import { AccountLifecycleController } from './controllers/account-lifecycle.controller';
 import { ProductsController } from './controllers/products.controller';
 import { ProjectionsController } from './controllers/projections.controller';
 import { RulesController } from './controllers/rules.controller';
@@ -44,6 +45,7 @@ import { WorkerQueueService } from './worker/worker-queue.service';
   controllers: [
     AppController,
     AccountsController,
+    AccountLifecycleController,
     ProductsController,
     ProjectionsController,
     RulesController,

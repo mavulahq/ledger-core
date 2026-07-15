@@ -1,12 +1,7 @@
 /*
- * mavula.io - General Ledger & Chart of Accounts Engine
- * Copyright (c) 2025 mavula.io
- * 
- * Author: EstandarMustaq <estandarmustaq@mavula.io>
- * License: Proprietary - See LICENSE file
- * 
- * Double-entry bookkeeping: GL, COA, journal entries, trial balance
- * Compliance: IFRS/Basel III ready
+ * mavula.io - General Ledger and Chart of Accounts
+ * Copyright (c) 2025-2026 mavula.io
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 import { Injectable } from '@nestjs/common';
@@ -15,6 +10,8 @@ import { FengineStoreService } from '../services/fengine-store.service';
 import { AuditTrailService } from '../services/audit-trail.service';
 import { DomainEventFactory } from '../domain-events/domain-event-factory.service';
 import { DomainOutboxService } from '../domain-events/domain-outbox.service';
+import type { AccountPostingInput } from '../accounts/account.types';
+import { AccountsService } from '../services/accounts.service';
 import {
   DomainEventEnvelope,
   LedgerJournalPostedPayload,
@@ -51,6 +48,7 @@ export interface JournalEntry {
   entries: LedgerLine[];
   status: 'DRAFT' | 'POSTED' | 'REVERSED';
   metadata: Record<string, any>;
+  account_postings?: AccountPostingInput[];
 }
 
 export interface LedgerLine {
@@ -106,6 +104,7 @@ export class LedgerService {
     private auditTrail: AuditTrailService,
     private domainEvents: DomainEventFactory,
     private outbox: DomainOutboxService,
+    private accounts: AccountsService,
   ) {}
 
   /**
@@ -274,23 +273,20 @@ export class LedgerService {
         return result.entry;
       }
     } else {
+      await this.accounts.assertMemoryPostingsAllowed(
+        tenantId,
+        entry.account_postings || [],
+        entry.entry_id,
+      );
       const lines = await this.postMemoryJournalEntry(tenantId, entry);
       await this.outbox.append(
         this.domainEvents.ledgerJournalPosted({ tenantId, entry, lines }),
       );
     }
 
-    this.auditTrail.record({
-      tenant_id: tenantId,
-      action: 'ledger.entry.posted',
-      entity_type: 'journal_entry',
-      entity_id: entry.entry_id,
-      phase: 'ACT',
-      metadata: {
-        transaction_id: entry.transaction_id,
-        lines: entry.entries.length,
-      },
-    });
+    if (!this.prisma.isConfigured) {
+      this.auditTrail.record(this.journalPostedAudit(tenantId, entry));
+    }
 
     return entry;
   }
@@ -389,6 +385,16 @@ export class LedgerService {
     }
 
     await this.store.saveJournalEntry(tenantId, entry);
+    if (entry.account_postings?.length) {
+      await this.accounts.appendMemoryPostings(
+        tenantId,
+        entry.entry_id,
+        entry.transaction_id,
+        entry.posted_by,
+        entry.posting_date,
+        entry.account_postings,
+      );
+    }
     return lines;
   }
 
@@ -450,10 +456,23 @@ export class LedgerService {
         lines.push(this.eventLine(line, account.currency));
       }
 
+      if (entry.account_postings?.length) {
+        await this.accounts.appendPostingsInTransaction(
+          tx,
+          tenantId,
+          entry.entry_id,
+          entry.transaction_id,
+          entry.posted_by,
+          entry.posting_date,
+          entry.account_postings,
+        );
+      }
+
       await this.appendOutboxInTransaction(
         tx,
         this.domainEvents.ledgerJournalPosted({ tenantId, entry, lines }),
       );
+      await this.auditTrail.recordInTransaction(tx, this.journalPostedAudit(tenantId, entry));
 
       return { entry: this.journalEntryFromRow(inserted[0]), posted: true };
     });
@@ -546,6 +565,22 @@ export class LedgerService {
       ON CONFLICT ("tenantId", "idempotencyKey") DO UPDATE SET
         "updatedAt" = "domain_outbox_events"."updatedAt"
     `;
+  }
+
+  private journalPostedAudit(tenantId: string, entry: JournalEntry) {
+    return {
+      tenant_id: tenantId,
+      action: 'ledger.entry.posted',
+      entity_type: 'journal_entry',
+      entity_id: entry.entry_id,
+      phase: 'ACT' as const,
+      actor_id: entry.posted_by,
+      metadata: {
+        transaction_id: entry.transaction_id,
+        lines: entry.entries.length,
+        account_entries: entry.account_postings?.length || 0,
+      },
+    };
   }
 
   private journalEntryFromRow(row: any): JournalEntry {

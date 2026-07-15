@@ -66,6 +66,58 @@ describeRls('PostgreSQL tenant RLS', () => {
       INSERT INTO public.accounts (id, "tenantId", name, balance)
       VALUES (${`cross_${suffix}`}, ${tenantB}, 'Cross tenant account', 30)
     `)).rejects.toThrow();
+
+    await scoped.withTenant(tenantA, (tx) => tx.$executeRaw`
+      INSERT INTO public.account_lifecycle_requests (
+        id, "tenantId", "accountId", transition, "fromStatus", "targetStatus",
+        "expectedAccountVersion", reason, "requestedBy", "requestedRoles",
+        "institutionId", "correlationId"
+      ) VALUES (
+        ${`request_a_${suffix}`}, ${tenantA}, ${`account_a_${suffix}`}, 'FREEZE',
+        'ACTIVE', 'FROZEN', 1, 'RLS lifecycle request', 'maker_a', '[]'::jsonb,
+        ${institutionA}, 'corr_rls_a'
+      )
+    `);
+    const lifecycleRows = await scoped.withTenant(tenantA, (tx) => tx.$queryRaw<Array<{ tenantId: string }>>`
+      SELECT "tenantId" FROM public.account_lifecycle_requests
+    `);
+    expect(lifecycleRows).toEqual([{ tenantId: tenantA }]);
+    await expect(scoped.withTenant(tenantA, (tx) => tx.$executeRaw`
+      INSERT INTO public.account_lifecycle_requests (
+        id, "tenantId", "accountId", transition, "fromStatus", "targetStatus",
+        "expectedAccountVersion", reason, "requestedBy", "requestedRoles",
+        "institutionId", "correlationId"
+      ) VALUES (
+        ${`cross_request_${suffix}`}, ${tenantB}, ${`account_b_${suffix}`}, 'FREEZE',
+        'ACTIVE', 'FROZEN', 1, 'Cross tenant request', 'maker_a', '[]'::jsonb,
+        ${institutionB}, 'corr_cross'
+      )
+    `)).rejects.toThrow();
+  });
+
+  it('keeps account entries append-only for the runtime role', async () => {
+    const entryId = `entry_a_${suffix}`;
+    await scoped.withTenant(tenantA, (tx) => tx.$executeRaw`
+      INSERT INTO public.account_entries (
+        id, "tenantId", "accountId", "postingKey", "entryType", direction,
+        amount, currency, "balanceAfter", "createdBy", "postedAt"
+      ) VALUES (
+        ${entryId}, ${tenantA}, ${`account_a_${suffix}`}, ${`posting_a_${suffix}`},
+        'POSTING', 'CREDIT', 10, 'MZN', 10, 'SYSTEM', now()
+      )
+    `);
+    await expect(scoped.withTenant(tenantA, (tx) => tx.$executeRaw`
+      UPDATE public.account_entries SET amount = 20
+      WHERE "tenantId" = ${tenantA} AND id = ${entryId}
+    `)).rejects.toThrow();
+    await expect(scoped.withTenant(tenantA, (tx) => tx.$executeRaw`
+      DELETE FROM public.account_entries
+      WHERE "tenantId" = ${tenantA} AND id = ${entryId}
+    `)).rejects.toThrow();
+    await expect(scoped.withTenant(tenantA, (tx) => tx.$executeRaw`
+      DELETE FROM public.accounts
+      WHERE "tenantId" = ${tenantA} AND id = ${`account_a_${suffix}`}
+    `)).rejects.toThrow();
   });
 
   it('does not leak SET LOCAL context through a reused connection', async () => {
