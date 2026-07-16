@@ -5,6 +5,7 @@ import { EngineEventService } from '../worker/engine-event.service';
 import { RequirePermissions } from '../auth/permissions.decorator';
 import { WorkerQueueService } from '../worker/worker-queue.service';
 import { DomainEventWorkerCallback, EngineEventCallback, EnqueueEngineEventInput } from '../worker/worker.types';
+import { RegulatoryExportSourceService, type RegulatoryExportSourceRequest } from '../regulatory/regulatory-export-source.service';
 
 @Controller('internal/worker')
 @RequirePermissions('internal.worker')
@@ -14,7 +15,21 @@ export class InternalWorkerController {
     private readonly events: EngineEventService,
     private readonly outboxPublisher: DomainOutboxPublisherService,
     private readonly projections: ReadProjectionService,
+    private readonly regulatoryExports: RegulatoryExportSourceService,
   ) {}
+
+  @Post('regulatory-transaction-records')
+  async regulatoryTransactionRecords(@Req() req: any, @Body() body: RegulatoryExportSourceRequest) {
+    this.assertTenant(req, body?.tenant_id);
+    if (!body?.institution_id || body.institution_id !== req.identity?.institution_id) {
+      throw new ForbiddenException('Authenticated institution context does not match the request');
+    }
+    try {
+      return await this.regulatoryExports.page(body);
+    } catch (error) {
+      throw new BadRequestException((error as Error).message);
+    }
+  }
 
   @Post('jobs')
   enqueue(@Req() req: any, @Body() body: EnqueueEngineEventInput) {

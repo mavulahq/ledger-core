@@ -7,6 +7,8 @@ import { AccountsService } from '../src/services/accounts.service';
 import { AuditTrailService } from '../src/services/audit-trail.service';
 import { FengineStoreService } from '../src/services/fengine-store.service';
 import { PrismaService } from '../src/services/prisma.service';
+import { IdempotencyService } from '../src/idempotency/idempotency.service';
+import { MetricsService } from '../src/metrics/metrics.service';
 
 const describeRls = process.env.LEDGER_CORE_RLS_TEST === 'true' ? describe : describe.skip;
 
@@ -22,6 +24,7 @@ describeRls('PostgreSQL tenant RLS', () => {
   let adjustments: FinancialAdjustmentsService;
   let accounts: AccountsService;
   let ledger: LedgerService;
+  let idempotency: IdempotencyService;
 
   beforeAll(async () => {
     const migrationUrl = required('LEDGER_CORE_MIGRATION_DATABASE_URL');
@@ -40,6 +43,7 @@ describeRls('PostgreSQL tenant RLS', () => {
     const eventFactory = new DomainEventFactory();
     const outbox = new DomainOutboxService(scoped);
     ledger = new LedgerService(scoped, store, audit, eventFactory, outbox, accounts);
+    idempotency = new IdempotencyService(scoped, new MetricsService());
     adjustments = new FinancialAdjustmentsService(
       scoped,
       store,
@@ -143,6 +147,80 @@ describeRls('PostgreSQL tenant RLS', () => {
       DELETE FROM public.accounts
       WHERE "tenantId" = ${tenantA} AND id = ${`account_a_${suffix}`}
     `)).rejects.toThrow();
+  });
+
+  it('commits one receipt with one mutation for concurrent replays', async () => {
+    const key = `idem_concurrent_${suffix}`;
+    const accountId = `idem_account_${suffix}`;
+    const execute = () => idempotency.execute({
+      tenantId: tenantA,
+      operation: 'accounts.test-create',
+      key,
+      actorId: 'maker_a',
+      correlationId: `corr_idem_${suffix}`,
+      method: 'POST',
+      params: {},
+      query: {},
+      body: { account_id: accountId },
+    }, () => 201, async () => {
+      await scoped.withTenant(tenantA, (tx) => tx.$executeRaw`
+        INSERT INTO public.accounts (id, "tenantId", name, balance)
+        VALUES (${accountId}, ${tenantA}, 'Idempotent account', 0)
+      `);
+      return { id: accountId };
+    });
+
+    const results = await Promise.all([execute(), execute()]);
+    expect(results.map((result) => result.replayed).sort()).toEqual([false, true]);
+    const stored = await scoped.withTenant(tenantA, async (tx) => ({
+      accounts: await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM public.accounts WHERE id = ${accountId}
+      `,
+      receipts: await tx.$queryRaw<Array<{ actorId: string }>>`
+        SELECT "actorId" FROM public.idempotency_receipts
+        WHERE operation = 'accounts.test-create'
+      `,
+    }));
+    expect(stored.accounts).toEqual([{ id: accountId }]);
+    expect(stored.receipts).toEqual([{ actorId: 'maker_a' }]);
+    await expect(scoped.withTenant(tenantB, (tx) => tx.$queryRaw`
+      SELECT * FROM public.idempotency_receipts WHERE operation = 'accounts.test-create'
+    `)).resolves.toEqual([]);
+    await expect(scoped.withTenant(tenantA, (tx) => tx.$executeRaw`
+      UPDATE public.idempotency_receipts SET "actorId" = 'changed'
+      WHERE operation = 'accounts.test-create'
+    `)).rejects.toThrow();
+  });
+
+  it('rolls back the mutation and permits retry after a failed execution', async () => {
+    const key = `idem_rollback_${suffix}`;
+    const accountId = `rollback_account_${suffix}`;
+    const context = {
+      tenantId: tenantA,
+      operation: 'accounts.test-rollback',
+      key,
+      actorId: 'maker_a',
+      method: 'POST',
+      params: {},
+      query: {},
+      body: { account_id: accountId },
+    };
+    await expect(idempotency.execute(context, () => 201, async () => {
+      await scoped.withTenant(tenantA, (tx) => tx.$executeRaw`
+        INSERT INTO public.accounts (id, "tenantId", name, balance)
+        VALUES (${accountId}, ${tenantA}, 'Rollback account', 0)
+      `);
+      throw new Error('simulated failure');
+    })).rejects.toThrow('simulated failure');
+
+    const retry = await idempotency.execute(context, () => 201, async () => {
+      await scoped.withTenant(tenantA, (tx) => tx.$executeRaw`
+        INSERT INTO public.accounts (id, "tenantId", name, balance)
+        VALUES (${accountId}, ${tenantA}, 'Rollback account', 0)
+      `);
+      return { id: accountId };
+    });
+    expect(retry.replayed).toBe(false);
   });
 
   it('isolates adjustment requests and keeps structured audit events append-only', async () => {

@@ -75,7 +75,7 @@ describe('fengine - Integration Tests (app composition)', () => {
 
     it('metrics returns prometheus payload', async () => {
       const metrics = await metricsService.metrics();
-      expect(metrics).toContain('http_requests_total');
+      expect(metrics).toContain('ledger_core_http_requests_total');
     });
   });
 

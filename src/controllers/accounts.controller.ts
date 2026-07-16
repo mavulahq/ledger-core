@@ -14,6 +14,7 @@ import {
   CreateAccountV1Dto,
 } from '../dto/public.dto';
 import { AccountsService } from '../services/accounts.service';
+import { IdempotentOperation } from '../idempotency/idempotent-operation.decorator';
 
 @Controller('accounts')
 export class AccountsController {
@@ -54,12 +55,14 @@ export class AccountsController {
 
   @Post()
   @RequirePermissions('finance.write')
+  @IdempotentOperation('accounts.create')
   async create(@Req() req: any, @Body() body: CreateAccountV1Dto) {
     return this.publicAccount(await this.accounts.createAccount(req.tenantId, body, this.actor(req)));
   }
 
   @Post(':accountId/status-transitions')
   @RequirePermissions('finance.write')
+  @IdempotentOperation('accounts.status-transition.submit')
   async transition(
     @Req() req: any,
     @Param('accountId') accountId: string,

@@ -52,7 +52,12 @@ export class AuditTrailService {
 
   record(event: AuditTrailWriteEvent): AuditTrailEvent {
     const entry = this.appendMemory(event);
-    void this.persist(entry);
+    const persistence = this.persist(entry);
+    const tracked = typeof (this.prisma as any).trackTenantOperation === 'function'
+      && this.prisma.trackTenantOperation(persistence);
+    if (!tracked) {
+      void persistence.catch(() => undefined);
+    }
     return entry;
   }
 

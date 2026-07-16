@@ -8,6 +8,7 @@ import {
   RejectAccountLifecycleV1Dto,
 } from '../dto/public.dto';
 import { AccountsService } from '../services/accounts.service';
+import { IdempotentOperation } from '../idempotency/idempotent-operation.decorator';
 
 @Controller('account-lifecycle-requests')
 export class AccountLifecycleController {
@@ -36,6 +37,7 @@ export class AccountLifecycleController {
 
   @Post(':requestId/approve')
   @RequirePermissions('finance.approve')
+  @IdempotentOperation('account-lifecycle.approve')
   async approve(
     @Req() req: any,
     @Param('requestId') requestId: string,
@@ -51,6 +53,7 @@ export class AccountLifecycleController {
 
   @Post(':requestId/reject')
   @RequirePermissions('finance.approve')
+  @IdempotentOperation('account-lifecycle.reject')
   async reject(
     @Req() req: any,
     @Param('requestId') requestId: string,

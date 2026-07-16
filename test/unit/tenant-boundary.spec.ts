@@ -12,7 +12,7 @@ describe('tenant boundary guard', () => {
 
   it('binds the signed tenant-institution pair before service execution', async () => {
     const prisma = { bindTenantReference: jest.fn().mockResolvedValue(undefined) };
-    const guard = new TenantBoundaryGuard(reflector(false) as any, prisma as any);
+    const guard = new TenantBoundaryGuard(reflector(false) as any, prisma as any, { recordSecurityFailure: jest.fn() } as any);
 
     await expect(guard.canActivate(context({ identity, headers: {} }) as any)).resolves.toBe(true);
     expect(prisma.bindTenantReference).toHaveBeenCalledWith({
@@ -23,7 +23,7 @@ describe('tenant boundary guard', () => {
 
   it('returns a generic denial when the local financial reference differs', async () => {
     const prisma = { bindTenantReference: jest.fn().mockRejectedValue(new Error('database detail')) };
-    const guard = new TenantBoundaryGuard(reflector(false) as any, prisma as any);
+    const guard = new TenantBoundaryGuard(reflector(false) as any, prisma as any, { recordSecurityFailure: jest.fn() } as any);
     const log = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
 
     await expect(guard.canActivate(context({ identity, headers: {} }) as any)).rejects.toEqual(
@@ -36,7 +36,7 @@ describe('tenant boundary guard', () => {
 
   it('does not create a tenant reference for public routes', async () => {
     const prisma = { bindTenantReference: jest.fn() };
-    const guard = new TenantBoundaryGuard(reflector(true) as any, prisma as any);
+    const guard = new TenantBoundaryGuard(reflector(true) as any, prisma as any, { recordSecurityFailure: jest.fn() } as any);
 
     await expect(guard.canActivate(context({ headers: {} }) as any)).resolves.toBe(true);
     expect(prisma.bindTenantReference).not.toHaveBeenCalled();
