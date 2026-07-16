@@ -10,6 +10,35 @@ Legacy alias: `fengine`.
 - Idempotent financial transactions and double-entry ledger posting.
 - PostgreSQL persistence, Redis job publishing, audit trails, health and metrics.
 - Transactional Outbox/Inbox and read projections for active domain events.
+- Controlled account lifecycle with maker-checker approval and an immutable,
+  journal-backed customer-account subledger.
+- Controlled financial reversals and corrections for ledger and lending, with
+  immutable originals, maker-checker approval, and transactional domain events.
+
+## Account lifecycle
+
+Accounts open in `ACTIVE` state with a zero balance and an enabled account
+product. Balance and statement data come from append-only `account_entries`
+written in the same transaction as the corresponding journal entry.
+
+`POST /api/accounts/:accountId/status-transitions` submits `FREEZE`, `UNFREEZE`
+or `CLOSE` for approval. A different operator with `finance.approve` decides the
+request through `/api/account-lifecycle-requests/:requestId/approve` or
+`/reject`. Frozen accounts reject debits and closed accounts reject new
+postings.
+
+## Financial adjustments
+
+`POST /api/financial-adjustment-requests` submits a `REVERSAL` or `CORRECTION`
+against a posted transaction or journal entry. A different operator with
+`finance.approve` decides the request through
+`/api/financial-adjustment-requests/:requestId/approve` or `/reject`.
+
+Approval writes the reversal and optional replacement atomically. Loan payment
+and disbursement adjustments are rejected when a later financial effect exists.
+The original transaction and journal remain immutable; audit events and
+`ledger.adjustment_posted` or `lending.adjustment_applied` are written in the
+same transaction.
 
 ## Development
 

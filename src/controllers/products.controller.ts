@@ -2,6 +2,7 @@ import { Body, Controller, Get, NotFoundException, Param, Post, Req } from '@nes
 import { ProductConfigService, ProductType } from '../products/product-config.service';
 import { RequirePermissions } from '../auth/permissions.decorator';
 import { GenerateTenantConfigV1Dto, UpsertProductV1Dto } from '../dto/public.dto';
+import { IdempotentOperation } from '../idempotency/idempotent-operation.decorator';
 
 @Controller('products')
 export class ProductsController {
@@ -35,6 +36,7 @@ export class ProductsController {
 
   @Post()
   @RequirePermissions('configuration.write')
+  @IdempotentOperation('products.upsert')
   async upsert(@Req() req: any, @Body() body: UpsertProductV1Dto) {
     return this.products.createOrUpdateProduct(
       this.tenant(req),
@@ -45,6 +47,7 @@ export class ProductsController {
 
   @Post('config/generate')
   @RequirePermissions('configuration.write')
+  @IdempotentOperation('products.config.generate')
   async generateTenantConfig(@Req() req: any, @Body() body: GenerateTenantConfigV1Dto) {
     return this.products.generateTenantConfigSchema(
       this.tenant(req),

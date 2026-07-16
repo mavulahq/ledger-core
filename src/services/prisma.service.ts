@@ -6,6 +6,7 @@
 
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 export interface AuthenticatedTenantReference {
   tenantId: string;
@@ -16,6 +17,11 @@ export interface AuthenticatedTenantReference {
 export class PrismaService implements OnModuleInit, OnModuleDestroy {
   private readonly client?: PrismaClient;
   private readonly pendingTransactions = new Set<Promise<unknown>>();
+  private readonly transactionContext = new AsyncLocalStorage<{
+    tenantId: string;
+    tx: Prisma.TransactionClient;
+    pending: Set<Promise<unknown>>;
+  }>();
 
   constructor() {
     if (process.env.DATABASE_URL) {
@@ -54,13 +60,28 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     tenantId: string,
     operation: (tx: Prisma.TransactionClient) => Promise<T>,
   ): Promise<T> {
+    const active = this.transactionContext.getStore();
+    if (active) {
+      if (active.tenantId !== tenantId) {
+        throw new Error('A tenant transaction cannot be reused across tenant boundaries');
+      }
+      return operation(active.tx);
+    }
+
     if (!this.client) {
       throw new Error('Prisma client not configured');
     }
 
     const transaction = this.client.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
-      return operation(tx);
+      return this.transactionContext.run({ tenantId, tx, pending: new Set() }, async () => {
+        const result = await operation(tx);
+        const context = this.transactionContext.getStore();
+        if (context && context.pending.size > 0) {
+          await Promise.all(context.pending);
+        }
+        return result;
+      });
     });
     this.pendingTransactions.add(transaction);
     try {
@@ -68,6 +89,13 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     } finally {
       this.pendingTransactions.delete(transaction);
     }
+  }
+
+  trackTenantOperation(operation: Promise<unknown>): boolean {
+    const active = this.transactionContext.getStore();
+    if (!active) return false;
+    active.pending.add(operation);
+    return true;
   }
 
   async pendingOutboxTenantIds(limit: number): Promise<string[]> {
@@ -87,6 +115,29 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.client.$queryRaw<Array<{ status: string; count: bigint }>>`
       SELECT "status", "count" FROM public.domain_outbox_status_totals()
     `;
+  }
+
+  async cleanupExpiredIdempotencyReceipts(limit: number): Promise<number> {
+    if (!this.client) {
+      return 0;
+    }
+    const [result] = await this.client.$queryRaw<Array<{ deleted: number }>>`
+      SELECT public.cleanup_expired_idempotency_receipts(${limit}) AS deleted
+    `;
+    return Number(result?.deleted || 0);
+  }
+
+  async globalIdempotencyReceiptStatus(): Promise<{ active: number; expired: number }> {
+    if (!this.client) {
+      return { active: 0, expired: 0 };
+    }
+    const [result] = await this.client.$queryRaw<Array<{ active: bigint; expired: bigint }>>`
+      SELECT active, expired FROM public.idempotency_receipt_status_totals()
+    `;
+    return {
+      active: Number(result?.active || 0),
+      expired: Number(result?.expired || 0),
+    };
   }
 
   async onModuleInit() {

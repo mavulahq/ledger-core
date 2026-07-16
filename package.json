@@ -10,6 +10,7 @@
     "prebuild": "prisma generate",
     "build": "tsc -p tsconfig.json",
     "guardian:check": "node scripts/guardian.mjs",
+    "openapi:check": "node scripts/check-openapi.mjs",
     "start": "node dist/main.js",
     "start:dev": "ts-node-dev --respawn --transpile-only src/main.ts",
     "check:no-console": "node scripts/check-no-console.js",

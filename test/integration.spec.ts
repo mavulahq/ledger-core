@@ -75,7 +75,7 @@ describe('fengine - Integration Tests (app composition)', () => {
 
     it('metrics returns prometheus payload', async () => {
       const metrics = await metricsService.metrics();
-      expect(metrics).toContain('http_requests_total');
+      expect(metrics).toContain('ledger_core_http_requests_total');
     });
   });
 
@@ -99,12 +99,37 @@ describe('fengine - Integration Tests (app composition)', () => {
     });
 
     it('creates account for tenant', async () => {
-      const res = await accountsController.create(
+      await productsController.upsert(
         { tenantId },
-        { name: 'Test Account', balance: 1000 },
+        {
+          type: ProductType.CHECKING,
+          config: {
+            product_id: 'prod_api_account',
+            name: 'API Current Account',
+            enabled: true,
+          },
+        },
+      );
+      const res = await accountsController.create(
+        {
+          tenantId,
+          identity: {
+            sub: 'operator-maker',
+            roles: ['operations_maker'],
+            institution_id: 'test_institution_001',
+          },
+          headers: {},
+        },
+        {
+          customer_id: 'customer-account-api',
+          product_id: 'prod_api_account',
+          name: 'Test Account',
+          currency: 'MZN',
+        },
       );
       expect(res).toHaveProperty('id');
       expect(res.name).toBe('Test Account');
+      expect(res.balance).toBe('0.00');
     });
   });
 

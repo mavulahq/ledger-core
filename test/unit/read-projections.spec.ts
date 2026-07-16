@@ -125,6 +125,91 @@ describe('read projections', () => {
     });
   });
 
+  it('keeps ledger adjustment state when the original journal arrives later', async () => {
+    const original = factory.ledgerJournalPosted({
+      tenantId,
+      entry: journalEntry(),
+      lines: [
+        { account_code: '10010', currency: 'MZN', debit: '100.00', credit: '0.00' },
+        { account_code: '20010', currency: 'MZN', debit: '0.00', credit: '100.00' },
+      ],
+      occurredAt: new Date('2026-07-15T10:00:00.000Z'),
+    });
+    const adjustment = factory.ledgerAdjustmentPosted({
+      tenantId,
+      requestId: 'far_projection_001',
+      adjustmentType: 'CORRECTION',
+      targetJournalEntryId: 'je_txn_001',
+      reversalJournalEntryId: 'je_reversal_projection_001',
+      replacementJournalEntryId: 'je_correction_projection_001',
+      correlationId: 'corr_projection_adjustment_001',
+      occurredAt: new Date('2026-07-15T11:00:00.000Z'),
+    });
+
+    await service.apply(adjustment);
+    await service.apply(original);
+
+    await expect(service.get(tenantId, 'ledger_activity', 'je_txn_001')).resolves.toMatchObject({
+      last_event_id: adjustment.event_id,
+      data: expect.objectContaining({
+        journal_entry_id: 'je_txn_001',
+        adjustment_request_id: 'far_projection_001',
+        adjustment_type: 'CORRECTION',
+        replacement_journal_entry_id: 'je_correction_projection_001',
+        event_count: 2,
+      }),
+    });
+    await expect(service.status(tenantId)).resolves.toMatchObject({
+      projections: [expect.objectContaining({ projection_name: 'ledger_activity', event_count: 2 })],
+    });
+  });
+
+  it('rebuilds a corrected loan projection from active adjustment events', async () => {
+    const loan = approvedLoan();
+    const disbursed = factory.loanDisbursed({
+      tenantId,
+      loan,
+      transactionId: 'disburse_adjusted_001',
+      currency: 'MZN',
+      occurredAt: new Date('2026-07-15T10:00:00.000Z'),
+      aggregateVersion: 1,
+    });
+    const adjustment = factory.lendingAdjustmentApplied({
+      tenantId,
+      requestId: 'far_loan_projection_001',
+      adjustmentType: 'CORRECTION',
+      operation: 'LOAN_PAYMENT',
+      loanId: loan.id,
+      loanVersion: 2,
+      originalTransactionId: 'payment_original_001',
+      reversalTransactionId: 'payment_reversal_001',
+      replacementTransactionId: 'payment_correction_001',
+      amount: '550.00',
+      currency: 'MZN',
+      allocation: { principal: '500.00', interest: '50.00', fees: '0.00' },
+      balanceAfter: '24500.00',
+      loanStatus: LoanStatus.ACTIVE,
+      correlationId: 'corr_loan_projection_adjustment_001',
+      occurredAt: new Date('2026-07-15T11:00:00.000Z'),
+    });
+    await outbox.append(disbursed);
+    await outbox.append(adjustment);
+
+    await expect(service.rebuild({ tenantId, projectionName: 'loan_activity' })).resolves.toMatchObject({
+      rebuilt: 2,
+      scanned: 2,
+    });
+    await expect(service.get(tenantId, 'loan_activity', loan.id)).resolves.toMatchObject({
+      last_event_id: adjustment.event_id,
+      data: expect.objectContaining({
+        latest_activity_type: 'LOAN_PAYMENT_CORRECTION',
+        latest_transaction_id: 'payment_correction_001',
+        balance_after: '24500.00',
+        activity_count: 2,
+      }),
+    });
+  });
+
   it('does not duplicate projection history when an inbox record is replayed', async () => {
     const event = factory.loanDisbursed({
       tenantId,

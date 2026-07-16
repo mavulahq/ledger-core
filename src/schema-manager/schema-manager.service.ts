@@ -111,7 +111,9 @@ export class SchemaManagerService {
       action: 'schema.created',
       entity_type: 'schema',
       entity_id: schema.entity_id,
-      phase: 'ACT',
+      stage: 'CONFIGURED',
+      result: 'SUCCEEDED',
+      source: 'SYSTEM',
       metadata: { entity_name: schema.entity_name, field_count: schema.fields.length },
     });
 
@@ -222,7 +224,9 @@ export class SchemaManagerService {
       action: 'workflow.created',
       entity_type: 'workflow',
       entity_id: wf.workflow_id,
-      phase: 'ACT',
+      stage: 'DISPATCHED',
+      result: 'SUCCEEDED',
+      source: 'SYSTEM',
       metadata: { trigger: wf.trigger, steps: wf.steps.length },
     });
 

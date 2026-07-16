@@ -192,7 +192,9 @@ export class LoanService {
       action: 'loan.applied',
       entity_type: 'loan',
       entity_id: loanId,
-      phase: 'OBSERVE',
+      stage: 'REQUESTED',
+      result: 'PENDING',
+      source: 'SYSTEM',
       metadata: {
         customer_id: loan.customer_id,
         principal: loan.principal_amount,
@@ -271,7 +273,9 @@ export class LoanService {
         action: 'loan.approved',
         entity_type: 'loan',
         entity_id: loan.id,
-        phase: 'DECIDE',
+        stage: 'AUTHORIZED',
+        result: 'SUCCEEDED',
+        source: 'SYSTEM',
         metadata: {
           monthly_rate: loan.monthly_rate,
           monthly_payment: loan.monthly_payment,
@@ -288,7 +292,9 @@ export class LoanService {
         action: 'loan.rejected',
         entity_type: 'loan',
         entity_id: loan.id,
-        phase: 'DECIDE',
+        stage: 'AUTHORIZED',
+        result: 'REJECTED',
+        source: 'SYSTEM',
         metadata: {
           failed_rules: ruleResults
             .filter((result) => !result.passed)
@@ -411,7 +417,9 @@ export class LoanService {
         action: 'loan.disbursed',
         entity_type: 'loan',
         entity_id: loan.id,
-        phase: 'ACT',
+        stage: 'POSTED',
+        result: 'SUCCEEDED',
+        source: 'SYSTEM',
         metadata: {
           transaction_id: result.transaction_id,
           amount: loan.disbursed_amount,
@@ -573,7 +581,9 @@ export class LoanService {
         action: 'loan.payment.recorded',
         entity_type: 'loan',
         entity_id: loan.id,
-        phase: 'ACT',
+        stage: 'POSTED',
+        result: 'SUCCEEDED',
+        source: 'SYSTEM',
         metadata: {
           payment_amount: paymentAmount,
           principal_paid: principalPaid,

@@ -8,6 +8,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { PUBLIC_ROUTE } from './public.decorator';
 import type { AccessTokenClaims } from './access-token.types';
+import { MetricsService } from '../metrics/metrics.service';
 
 @Injectable()
 export class AccessTokenGuard implements CanActivate {
@@ -16,7 +17,10 @@ export class AccessTokenGuard implements CanActivate {
   private readonly jwksUri: URL;
   private jwks?: ReturnType<typeof import('jose')['createRemoteJWKSet']>;
 
-  constructor(private readonly reflector: Reflector) {
+  constructor(
+    private readonly reflector: Reflector,
+    private readonly metrics: MetricsService,
+  ) {
     this.issuer = this.required('OIDC_ISSUER').replace(/\/$/, '');
     this.audience = this.required('OIDC_AUDIENCE');
     this.jwksUri = new URL(this.required('OIDC_JWKS_URI'));
@@ -34,6 +38,7 @@ export class AccessTokenGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const authorization = request.headers.authorization;
     if (typeof authorization !== 'string' || !authorization.startsWith('Bearer ')) {
+      this.metrics.recordSecurityFailure('authentication', 'missing_bearer');
       throw new UnauthorizedException('Bearer access token is required');
     }
     try {
@@ -48,6 +53,7 @@ export class AccessTokenGuard implements CanActivate {
       this.assertClaims(payload);
       const selectedTenant = request.headers['x-tenant-id'];
       if (selectedTenant !== undefined && selectedTenant !== payload.tenant_id) {
+        this.metrics.recordSecurityFailure('tenant', 'header_mismatch');
         throw new ForbiddenException('X-Tenant-ID does not match the authenticated tenant');
       }
       request.identity = payload as AccessTokenClaims;
@@ -57,6 +63,7 @@ export class AccessTokenGuard implements CanActivate {
       return true;
     } catch (error) {
       if (error instanceof ForbiddenException) throw error;
+      this.metrics.recordSecurityFailure('authentication', 'invalid_token');
       throw new UnauthorizedException('Invalid access token');
     }
   }

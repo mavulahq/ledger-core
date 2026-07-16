@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { hostname } from 'os';
 import { PrismaService } from '../services/prisma.service';
+import type { TenantTransaction } from '../accounts/account.types';
 import {
   DomainEventEnvelope,
   DomainOutboxRecord,
@@ -66,6 +67,32 @@ export class DomainOutboxService {
       `;
       return this.fromRow(row);
     });
+  }
+
+  async appendInTransaction(
+    tx: TenantTransaction,
+    envelope: DomainEventEnvelope,
+    options: { maxAttempts?: number } = {},
+  ): Promise<void> {
+    assertDomainEventEnvelope(envelope);
+    const maxAttempts = Number(options.maxAttempts || process.env.FENGINE_OUTBOX_MAX_ATTEMPTS || 3);
+    await tx.$executeRaw`
+      INSERT INTO "domain_outbox_events" (
+        "eventId", "tenantId", "eventType", "eventVersion", "occurredAt",
+        "aggregateType", "aggregateId", "aggregateVersion", "correlationId",
+        "causationId", "idempotencyKey", payload, metadata, status, attempts,
+        "maxAttempts", "availableAt", "updatedAt"
+      )
+      VALUES (
+        ${envelope.event_id}, ${envelope.tenant_id}, ${envelope.event_type},
+        ${envelope.event_version}, ${new Date(envelope.occurred_at)},
+        ${envelope.aggregate.type}, ${envelope.aggregate.id}, ${envelope.aggregate.version},
+        ${envelope.correlation_id}, ${envelope.causation_id}, ${envelope.idempotency_key || null},
+        CAST(${JSON.stringify(envelope.payload)} AS jsonb), CAST(${JSON.stringify(envelope.metadata)} AS jsonb),
+        'PENDING', 0, ${maxAttempts}, now(), now()
+      )
+      ON CONFLICT ("tenantId", "idempotencyKey") DO NOTHING
+    `;
   }
 
   async list(tenantId: string): Promise<DomainOutboxRecord[]> {

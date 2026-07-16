@@ -350,7 +350,9 @@ export class RulesEngineService {
         action: 'rules.evaluated',
         entity_type: 'rules',
         entity_id: productId,
-        phase: 'ORIENT',
+        stage: 'EVALUATED',
+        result: 'SUCCEEDED',
+        source: 'SYSTEM',
         metadata: {
           stage: normalizedContext.stage || 'UNSPECIFIED',
           passed: results.filter((item) => item.passed).length,
@@ -414,7 +416,9 @@ export class RulesEngineService {
       action: 'rule.created',
       entity_type: 'rule',
       entity_id: rule.id,
-      phase: 'ACT',
+      stage: 'CONFIGURED',
+      result: 'SUCCEEDED',
+      source: 'SYSTEM',
       metadata: { product_id: rule.product_id, rule_type: rule.rule_type },
     });
   }

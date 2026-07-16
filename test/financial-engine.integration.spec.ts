@@ -22,6 +22,7 @@ import { DomainEventFactory } from '../src/domain-events/domain-event-factory.se
 import { DomainInboxService } from '../src/domain-events/domain-inbox.service';
 import { DomainOutboxService } from '../src/domain-events/domain-outbox.service';
 import { ReadProjectionService } from '../src/read-models/read-projection.service';
+import { AccountsService } from '../src/services/accounts.service';
 
 describe('Financial engine loan lifecycle integration', () => {
   let loanService: LoanService;
@@ -46,6 +47,7 @@ describe('Financial engine loan lifecycle integration', () => {
         RulesEngineService,
         LedgerService,
         ProductConfigService,
+        AccountsService,
         FengineStoreService,
         AuditTrailService,
         DomainEventFactory,

@@ -8,53 +8,157 @@ datasource db {
 }
 
 model Account {
-  id        String   @id @default(cuid())
-  tenantId  String
-  name      String
-  balance   Decimal  @default("0")
-  createdAt DateTime @default(now())
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                String                    @id @default(cuid())
+  tenantId          String
+  customerId        String?
+  productId         String?
+  name              String
+  currency          String                    @default("MZN")
+  status            String                    @default("ACTIVE")
+  balance           Decimal                   @default("0")
+  version           Int                       @default(1)
+  createdBy         String?
+  frozenAt          DateTime?
+  frozenBy          String?
+  freezeReason      String?
+  closedAt          DateTime?
+  closedBy          String?
+  closeReason       String?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @default(now()) @updatedAt
+  tenant            Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product           Product?                  @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  entries           AccountEntry[]
+  lifecycleRequests AccountLifecycleRequest[]
 
+  @@unique([tenantId, id])
   @@index([tenantId])
+  @@index([tenantId, customerId])
+  @@index([tenantId, productId])
+  @@index([tenantId, status])
   @@map("accounts")
 }
 
+model AccountEntry {
+  id             String   @id
+  tenantId       String
+  accountId      String
+  journalEntryId String?
+  transactionId  String?
+  postingKey     String
+  entryType      String
+  direction      String
+  amount         Decimal
+  currency       String
+  balanceAfter   Decimal
+  reference      String?
+  createdBy      String
+  postedAt       DateTime
+  createdAt      DateTime @default(now())
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account        Account  @relation(fields: [tenantId, accountId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, postingKey])
+  @@index([tenantId, accountId, postedAt, id])
+  @@index([tenantId, journalEntryId])
+  @@index([tenantId, transactionId])
+  @@map("account_entries")
+}
+
+model AccountLifecycleRequest {
+  id                     String    @id
+  tenantId               String
+  accountId              String
+  transition             String
+  fromStatus             String
+  targetStatus           String
+  expectedAccountVersion Int
+  status                 String    @default("PENDING_APPROVAL")
+  reason                 String
+  requestedBy            String
+  requestedRoles         Json
+  institutionId          String
+  branchId               String?
+  correlationId          String
+  decidedBy              String?
+  decisionReason         String?
+  decidedAt              DateTime?
+  appliedAt              DateTime?
+  failureReason          String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @default(now()) @updatedAt
+  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account                Account   @relation(fields: [tenantId, accountId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, accountId, createdAt])
+  @@map("account_lifecycle_requests")
+}
+
 model Tenant {
-  id             String                 @id
-  institutionId  String?                @unique
-  name           String?
-  jurisdiction   String?
-  createdAt      DateTime               @default(now())
-  updatedAt      DateTime               @updatedAt
-  accounts       Account[]
-  products       Product[]
-  tenantConfigs  TenantConfig[]
-  loans          Loan[]
-  transactions   FinancialTransaction[]
-  ledgerAccounts LedgerAccount[]
-  journalEntries JournalEntry[]
-  schemas        CustomEntitySchema[]
-  workflows      WorkflowDefinition[]
-  rules          Rule[]
-  auditTrail     AuditTrailEvent[]
-  domainOutbox   DomainOutboxEvent[]
-  domainInbox    DomainInboxEvent[]
-  readProjections ReadProjection[]
-  projectionCheckpoints ProjectionCheckpoint[]
+  id                       String                    @id
+  institutionId            String?                   @unique
+  name                     String?
+  jurisdiction             String?
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+  accounts                 Account[]
+  accountEntries           AccountEntry[]
+  accountLifecycleRequests AccountLifecycleRequest[]
+  financialAdjustmentRequests FinancialAdjustmentRequest[]
+  products                 Product[]
+  tenantConfigs            TenantConfig[]
+  loans                    Loan[]
+  transactions             FinancialTransaction[]
+  ledgerAccounts           LedgerAccount[]
+  journalEntries           JournalEntry[]
+  schemas                  CustomEntitySchema[]
+  workflows                WorkflowDefinition[]
+  rules                    Rule[]
+  auditTrail               AuditTrailEvent[]
+  domainOutbox             DomainOutboxEvent[]
+  domainInbox              DomainInboxEvent[]
+  readProjections          ReadProjection[]
+  projectionCheckpoints    ProjectionCheckpoint[]
+  idempotencyReceipts      IdempotencyReceipt[]
 
   @@map("tenants")
 }
 
+model IdempotencyReceipt {
+  id            String   @id @default(cuid())
+  tenantId      String
+  operation     String
+  keyDigest     String
+  requestHash   String
+  actorId       String
+  correlationId String?
+  httpStatus    Int
+  responseBody  Json
+  completedAt   DateTime @default(now())
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, operation, keyDigest])
+  @@index([expiresAt])
+  @@index([tenantId, completedAt])
+  @@map("idempotency_receipts")
+}
+
 model Product {
-  id        String   @id
+  id        String    @id
   tenantId  String
   type      String
   name      String
-  enabled   Boolean  @default(true)
+  enabled   Boolean   @default(true)
   config    Json
-  createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now()) @updatedAt
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  accounts  Account[]
 
   @@unique([tenantId, id])
   @@index([tenantId])
@@ -101,12 +205,18 @@ model FinancialTransaction {
   data           Json
   createdAt      DateTime  @default(now())
   postedAt       DateTime?
+  adjustmentRequestId String?
+  reversalOfTransactionId String?
+  correctionOfTransactionId String?
   tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, id])
   @@unique([tenantId, idempotencyKey])
   @@index([tenantId])
   @@index([tenantId, loanId])
+  @@index([tenantId, adjustmentRequestId])
+  @@index([tenantId, reversalOfTransactionId])
+  @@index([tenantId, correctionOfTransactionId])
   @@map("financial_transactions")
 }
 
@@ -141,12 +251,58 @@ model JournalEntry {
   lines         Json
   metadata      Json
   createdAt     DateTime @default(now())
+  adjustmentRequestId String?
+  reversalOfEntryId String?
+  correctionOfEntryId String?
   tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, id])
   @@index([tenantId])
   @@index([tenantId, transactionId])
+  @@index([tenantId, adjustmentRequestId])
+  @@index([tenantId, reversalOfEntryId])
+  @@index([tenantId, correctionOfEntryId])
   @@map("journal_entries")
+}
+
+model FinancialAdjustmentRequest {
+  id                       String   @id
+  tenantId                 String
+  targetType               String
+  targetId                 String
+  adjustmentType           String
+  status                   String   @default("PENDING_APPROVAL")
+  reason                   String
+  correction               Json?
+  targetTransactionId      String?
+  targetJournalEntryId     String
+  targetLoanId             String?
+  expectedLoanVersion      Int?
+  requestedBy              String
+  requestedRoles           Json
+  institutionId            String
+  branchId                 String?
+  correlationId            String
+  decidedBy                String?
+  decisionReason           String?
+  decidedAt                DateTime?
+  appliedAt                DateTime?
+  failureReason            String?
+  reversalTransactionId    String?
+  reversalJournalEntryId   String?
+  replacementTransactionId String?
+  replacementJournalEntryId String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @default(now()) @updatedAt
+  tenant                   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, targetType, targetId, createdAt])
+  @@index([tenantId, targetTransactionId])
+  @@index([tenantId, targetJournalEntryId])
+  @@index([tenantId, targetLoanId])
+  @@map("financial_adjustment_requests")
 }
 
 model CustomEntitySchema {
@@ -208,13 +364,25 @@ model AuditTrailEvent {
   entityType String
   entityId   String
   phase      String?
+  stage      String?
+  result     String?
+  source     String?
   actorId    String?
+  actorRoles Json?
+  institutionId String?
+  branchId   String?
+  reason     String?
+  correlationId String?
+  causationId String?
+  approvalReference String?
   metadata   Json
   createdAt  DateTime @default(now())
   tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@index([tenantId, entityType, entityId])
+  @@index([tenantId, stage, createdAt])
+  @@index([tenantId, correlationId])
   @@map("audit_trail_events")
 }
 
@@ -294,18 +462,18 @@ model ReadProjection {
 }
 
 model ProjectionCheckpoint {
-  id               String   @id @default(cuid())
+  id               String    @id @default(cuid())
   tenantId         String
   projectionName   String
   lastEventId      String?
   lastEventType    String?
   lastEventVersion Int?
   lastOccurredAt   DateTime?
-  eventCount       Int      @default(0)
-  lagMs            BigInt   @default(0)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @default(now()) @updatedAt
-  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  eventCount       Int       @default(0)
+  lagMs            BigInt    @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now()) @updatedAt
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, projectionName])
   @@index([tenantId])
