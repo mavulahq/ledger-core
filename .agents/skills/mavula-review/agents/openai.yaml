@@ -1,0 +1,4 @@
+interface:
+  display_name: "MAVULA Review"
+  short_description: "Review regulated banking changes against strict evidence gates"
+  default_prompt: "Use $mavula-review to review this MAVULA change for financial correctness, module ownership, tenant and data safety, security, contracts, operability, and production evidence."

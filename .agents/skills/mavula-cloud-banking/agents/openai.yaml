@@ -1,0 +1,4 @@
+interface:
+  display_name: "MAVULA Cloud Banking"
+  short_description: "Engineer regulated, composable cloud-banking systems"
+  default_prompt: "Use $mavula-cloud-banking to design or implement this MAVULA change with explicit ownership, financial invariants, security, recovery, operability, and scale evidence."

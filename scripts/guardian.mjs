@@ -2,8 +2,10 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { enforceLocalAgentPolicy } from "./check-agent-policy.mjs";
 
 const failures = [];
+failures.push(...enforceLocalAgentPolicy());
 
 function fail(message) {
   failures.push(message);
