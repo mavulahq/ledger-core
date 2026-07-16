@@ -47,7 +47,9 @@ export class EngineEventService {
       action: 'worker.event.processed',
       entity_type: 'worker_job',
       entity_id: event.job_id,
-      phase: 'ACT',
+      stage: 'DISPATCHED',
+      result: 'SUCCEEDED',
+      source: 'WORKER',
       metadata: {
         event_type: event.event_type,
         executed_workflows: executions.length,
@@ -103,7 +105,9 @@ export class EngineEventService {
         action: 'domain_event.processed',
         entity_type: 'domain_event',
         entity_id: event.event_id,
-        phase: 'ACT',
+        stage: 'DISPATCHED',
+        result: 'SUCCEEDED',
+        source: 'WORKER',
         metadata: {
           event_type: event.event_type,
           executed_workflows: executions.length,

@@ -1,6 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from './prisma.service';
+
+export const AUDIT_TRAIL_STAGES = [
+  'REQUESTED',
+  'VALIDATED',
+  'EVALUATED',
+  'AUTHORIZED',
+  'POSTED',
+  'CONFIGURED',
+  'DISPATCHED',
+] as const;
+export type AuditTrailStage = (typeof AUDIT_TRAIL_STAGES)[number];
+export type AuditTrailResult = 'PENDING' | 'SUCCEEDED' | 'REJECTED' | 'FAILED' | 'REVERSED';
+export type AuditTrailSource = 'API' | 'WORKER' | 'SYSTEM';
 
 export interface AuditTrailEvent {
   id: string;
@@ -9,10 +23,26 @@ export interface AuditTrailEvent {
   entity_type: string;
   entity_id: string;
   phase?: 'OBSERVE' | 'ORIENT' | 'DECIDE' | 'ACT';
+  stage?: AuditTrailStage;
+  result?: AuditTrailResult;
+  source?: AuditTrailSource;
   actor_id?: string;
+  actor_roles?: string[];
+  institution_id?: string;
+  branch_id?: string;
+  reason?: string;
+  correlation_id?: string;
+  causation_id?: string;
+  approval_reference?: string;
   metadata: Record<string, any>;
   created_at: Date;
 }
+
+export type AuditTrailWriteEvent = Omit<AuditTrailEvent, 'id' | 'created_at' | 'phase'> & {
+  stage: AuditTrailStage;
+  result: AuditTrailResult;
+  source: AuditTrailSource;
+};
 
 @Injectable()
 export class AuditTrailService {
@@ -20,15 +50,20 @@ export class AuditTrailService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  record(event: Omit<AuditTrailEvent, 'id' | 'created_at'>): AuditTrailEvent {
+  record(event: AuditTrailWriteEvent): AuditTrailEvent {
     const entry = this.appendMemory(event);
-    void this.persist(entry);
+    const persistence = this.persist(entry);
+    const tracked = typeof (this.prisma as any).trackTenantOperation === 'function'
+      && this.prisma.trackTenantOperation(persistence);
+    if (!tracked) {
+      void persistence.catch(() => undefined);
+    }
     return entry;
   }
 
   async recordInTransaction(
     tx: Prisma.TransactionClient,
-    event: Omit<AuditTrailEvent, 'id' | 'created_at'>,
+    event: AuditTrailWriteEvent,
   ): Promise<AuditTrailEvent> {
     const entry = this.buildEntry(event);
     await this.persistWithTransaction(tx, entry);
@@ -49,7 +84,17 @@ export class AuditTrailService {
         entity_type: row.entityType,
         entity_id: row.entityId,
         phase: row.phase as AuditTrailEvent['phase'],
+        stage: row.stage as AuditTrailStage | undefined,
+        result: row.result as AuditTrailResult | undefined,
+        source: row.source as AuditTrailSource | undefined,
         actor_id: row.actorId || undefined,
+        actor_roles: this.parseRoles(row.actorRoles),
+        institution_id: row.institutionId || undefined,
+        branch_id: row.branchId || undefined,
+        reason: row.reason || undefined,
+        correlation_id: row.correlationId || undefined,
+        causation_id: row.causationId || undefined,
+        approval_reference: row.approvalReference || undefined,
         metadata: row.metadata as Record<string, any>,
         created_at: row.createdAt,
       }));
@@ -69,7 +114,7 @@ export class AuditTrailService {
   }
 
   private appendMemory(
-    event: Omit<AuditTrailEvent, 'id' | 'created_at'>,
+    event: AuditTrailWriteEvent,
   ): AuditTrailEvent {
     const entry = this.buildEntry(event);
     const tenantEvents = this.events.get(event.tenant_id) || [];
@@ -79,10 +124,10 @@ export class AuditTrailService {
   }
 
   private buildEntry(
-    event: Omit<AuditTrailEvent, 'id' | 'created_at'>,
+    event: AuditTrailWriteEvent,
   ): AuditTrailEvent {
     return {
-      id: `audit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: `audit_${randomUUID()}`,
       created_at: new Date(),
       ...event,
     };
@@ -93,8 +138,26 @@ export class AuditTrailService {
     entry: AuditTrailEvent,
   ): Promise<void> {
     await tx.$executeRaw`
-        INSERT INTO "audit_trail_events" ("id", "tenantId", "action", "entityType", "entityId", "phase", "actorId", "metadata", "createdAt")
-        VALUES (${entry.id}, ${entry.tenant_id}, ${entry.action}, ${entry.entity_type}, ${entry.entity_id}, ${entry.phase || null}, ${entry.actor_id || null}, CAST(${JSON.stringify(entry.metadata)} AS jsonb), ${entry.created_at})
+        INSERT INTO "audit_trail_events" (
+          "id", "tenantId", "action", "entityType", "entityId", "phase", stage,
+          result, source, "actorId", "actorRoles", "institutionId", "branchId",
+          reason, "correlationId", "causationId", "approvalReference", metadata, "createdAt"
+        )
+        VALUES (
+          ${entry.id}, ${entry.tenant_id}, ${entry.action}, ${entry.entity_type},
+          ${entry.entity_id}, NULL, ${entry.stage}, ${entry.result}, ${entry.source},
+          ${entry.actor_id || null}, CAST(${JSON.stringify(entry.actor_roles || [])} AS jsonb),
+          ${entry.institution_id || null}, ${entry.branch_id || null}, ${entry.reason || null},
+          ${entry.correlation_id || null}, ${entry.causation_id || null},
+          ${entry.approval_reference || null}, CAST(${JSON.stringify(entry.metadata)} AS jsonb),
+          ${entry.created_at}
+        )
       `;
+  }
+
+  private parseRoles(value: unknown): string[] | undefined {
+    if (value === null || value === undefined) return undefined;
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(parsed) ? parsed.map(String) : undefined;
   }
 }

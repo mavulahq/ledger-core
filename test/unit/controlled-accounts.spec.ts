@@ -124,9 +124,11 @@ describe('controlled account lifecycle', () => {
     const rejectedAudit = events.find((event) => event.action === 'account.lifecycle.rejected');
     expect(rejectedAudit).toMatchObject({
       actor_id: checker.subject,
+      stage: 'AUTHORIZED',
+      result: 'REJECTED',
+      source: 'API',
+      approval_reference: request.id,
       metadata: expect.objectContaining({
-        result: 'REJECTED',
-        approval_reference: request.id,
         maker_subject: maker.subject,
         checker_subject: checker.subject,
       }),

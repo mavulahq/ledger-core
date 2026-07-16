@@ -61,6 +61,9 @@ export interface Transaction {
   reversed_at?: Date;
   created_by: string;
   metadata: Record<string, any>;
+  adjustment_request_id?: string;
+  reversal_of_transaction_id?: string;
+  correction_of_transaction_id?: string;
 }
 
 export interface SettlementResult {
@@ -195,7 +198,9 @@ export class TransactionService {
         action: 'transaction.payment.posted',
         entity_type: 'transaction',
         entity_id: txnId,
-        phase: 'ACT',
+        stage: 'POSTED',
+        result: 'SUCCEEDED',
+        source: 'SYSTEM',
         metadata: {
           loan_id: params.loanId,
           payment_amount: params.paymentAmount,
@@ -288,7 +293,9 @@ export class TransactionService {
         action: 'transaction.disbursement.posted',
         entity_type: 'transaction',
         entity_id: txnId,
-        phase: 'ACT',
+        stage: 'POSTED',
+        result: 'SUCCEEDED',
+        source: 'SYSTEM',
         metadata: {
           customer_id: params.customerId,
           principal: params.principal,
@@ -354,7 +361,9 @@ export class TransactionService {
       action: 'transaction.reversed',
       entity_type: 'transaction',
       entity_id: transactionId,
-      phase: 'ACT',
+      stage: 'POSTED',
+      result: 'REVERSED',
+      source: 'SYSTEM',
       metadata: {},
     });
 

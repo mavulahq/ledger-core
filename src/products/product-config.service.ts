@@ -253,7 +253,9 @@ export class ProductConfigService {
       action: 'product.upserted',
       entity_type: 'product',
       entity_id: productId,
-      phase: 'ACT',
+      stage: 'CONFIGURED',
+      result: 'SUCCEEDED',
+      source: 'SYSTEM',
       metadata: { productType, enabled: product.enabled },
     });
   }
@@ -320,7 +322,9 @@ export class ProductConfigService {
       action: 'tenant.config.generated',
       entity_type: 'tenant_config',
       entity_id: tenantId,
-      phase: 'ACT',
+      stage: 'CONFIGURED',
+      result: 'SUCCEEDED',
+      source: 'SYSTEM',
       metadata: { jurisdiction, product_count: products.length },
     });
 

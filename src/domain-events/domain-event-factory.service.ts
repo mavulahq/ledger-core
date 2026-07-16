@@ -6,6 +6,8 @@ import type { ProductSchema } from '../products/product-config.service';
 import {
   DomainEventEnvelope,
   LedgerJournalPostedPayload,
+  LedgerAdjustmentPostedPayload,
+  LendingAdjustmentAppliedPayload,
   LendingPaymentPostedPayload,
   LoanDisbursedPayload,
   ProductsConfigurationPublishedPayload,
@@ -13,6 +15,93 @@ import {
 
 @Injectable()
 export class DomainEventFactory {
+  ledgerAdjustmentPosted(input: {
+    tenantId: string;
+    requestId: string;
+    adjustmentType: 'REVERSAL' | 'CORRECTION';
+    targetJournalEntryId: string;
+    reversalJournalEntryId: string;
+    replacementJournalEntryId?: string;
+    correlationId: string;
+    occurredAt?: Date;
+  }): DomainEventEnvelope<LedgerAdjustmentPostedPayload> {
+    const occurredAt = input.occurredAt || new Date();
+    return {
+      event_id: `evt_${randomUUID()}`,
+      event_type: 'ledger.adjustment_posted',
+      event_version: 1,
+      occurred_at: occurredAt.toISOString(),
+      tenant_id: input.tenantId,
+      aggregate: { type: 'financial_adjustment', id: input.requestId, version: 1 },
+      correlation_id: input.correlationId,
+      causation_id: input.requestId,
+      idempotency_key: `${input.tenantId}:${input.requestId}:ledger.adjustment_posted:v1`,
+      payload: {
+        adjustment_request_id: input.requestId,
+        adjustment_type: input.adjustmentType,
+        target_journal_entry_id: input.targetJournalEntryId,
+        reversal_journal_entry_id: input.reversalJournalEntryId,
+        replacement_journal_entry_id: input.replacementJournalEntryId,
+        applied_at: occurredAt.toISOString(),
+      },
+      metadata: {
+        producer: 'ledger-core',
+        data_classification: 'restricted',
+        schema_uri: 'contracts/domain-events/event-envelope.schema.json',
+      },
+    };
+  }
+
+  lendingAdjustmentApplied(input: {
+    tenantId: string;
+    requestId: string;
+    adjustmentType: 'REVERSAL' | 'CORRECTION';
+    operation: 'LOAN_PAYMENT' | 'LOAN_DISBURSEMENT';
+    loanId: string;
+    loanVersion: number;
+    originalTransactionId: string;
+    reversalTransactionId: string;
+    replacementTransactionId?: string;
+    amount: string;
+    currency: string;
+    allocation?: { principal: string; interest: string; fees: string };
+    balanceAfter: string;
+    loanStatus: string;
+    correlationId: string;
+    occurredAt?: Date;
+  }): DomainEventEnvelope<LendingAdjustmentAppliedPayload> {
+    const occurredAt = input.occurredAt || new Date();
+    return {
+      event_id: `evt_${randomUUID()}`,
+      event_type: 'lending.adjustment_applied',
+      event_version: 1,
+      occurred_at: occurredAt.toISOString(),
+      tenant_id: input.tenantId,
+      aggregate: { type: 'loan', id: input.loanId, version: input.loanVersion },
+      correlation_id: input.correlationId,
+      causation_id: input.requestId,
+      idempotency_key: `${input.tenantId}:${input.requestId}:lending.adjustment_applied:v1`,
+      payload: {
+        adjustment_request_id: input.requestId,
+        adjustment_type: input.adjustmentType,
+        operation: input.operation,
+        original_transaction_id: input.originalTransactionId,
+        reversal_transaction_id: input.reversalTransactionId,
+        replacement_transaction_id: input.replacementTransactionId,
+        money: { amount: input.amount, currency: input.currency },
+        allocation: input.allocation,
+        balance_after: input.balanceAfter,
+        loan_status: input.loanStatus,
+        applied_at: occurredAt.toISOString(),
+      },
+      metadata: {
+        producer: 'ledger-core',
+        data_classification: 'restricted',
+        schema_uri: 'contracts/domain-events/event-envelope.schema.json',
+      },
+    };
+  }
+
   ledgerJournalPosted(input: {
     tenantId: string;
     entry: JournalEntry;
