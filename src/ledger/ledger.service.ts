@@ -1,12 +1,7 @@
 /*
- * mavula.io - General Ledger & Chart of Accounts Engine
- * Copyright (c) 2025 mavula.io
- * 
- * Author: EstandarMustaq <estandarmustaq@mavula.io>
- * License: Proprietary - See LICENSE file
- * 
- * Double-entry bookkeeping: GL, COA, journal entries, trial balance
- * Compliance: IFRS/Basel III ready
+ * mavula.io - General Ledger and Chart of Accounts
+ * Copyright (c) 2025-2026 mavula.io
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 import { Injectable } from '@nestjs/common';
@@ -15,6 +10,8 @@ import { FengineStoreService } from '../services/fengine-store.service';
 import { AuditTrailService } from '../services/audit-trail.service';
 import { DomainEventFactory } from '../domain-events/domain-event-factory.service';
 import { DomainOutboxService } from '../domain-events/domain-outbox.service';
+import type { AccountPostingInput, TenantTransaction } from '../accounts/account.types';
+import { AccountsService } from '../services/accounts.service';
 import {
   DomainEventEnvelope,
   LedgerJournalPostedPayload,
@@ -51,6 +48,10 @@ export interface JournalEntry {
   entries: LedgerLine[];
   status: 'DRAFT' | 'POSTED' | 'REVERSED';
   metadata: Record<string, any>;
+  account_postings?: AccountPostingInput[];
+  adjustment_request_id?: string;
+  reversal_of_entry_id?: string;
+  correction_of_entry_id?: string;
 }
 
 export interface LedgerLine {
@@ -106,6 +107,7 @@ export class LedgerService {
     private auditTrail: AuditTrailService,
     private domainEvents: DomainEventFactory,
     private outbox: DomainOutboxService,
+    private accounts: AccountsService,
   ) {}
 
   /**
@@ -239,7 +241,9 @@ export class LedgerService {
       action: 'ledger.chart.seeded',
       entity_type: 'ledger_chart',
       entity_id: tenantId,
-      phase: 'ACT',
+      stage: 'CONFIGURED',
+      result: 'SUCCEEDED',
+      source: 'SYSTEM',
       metadata: { accounts: coa.length },
     });
     return coa;
@@ -250,15 +254,7 @@ export class LedgerService {
    * Rule: Debits must equal Credits
    */
   async postJournalEntry(tenantId: string, entry: JournalEntry): Promise<JournalEntry> {
-    const totalDebits = (entry.entries || [])
-      .reduce((sum, line) => sum + (line.debit_amount || 0), 0);
-    const totalCredits = (entry.entries || [])
-      .reduce((sum, line) => sum + (line.credit_amount || 0), 0);
-
-    if (Math.abs(totalDebits - totalCredits) > 0.01) {
-      throw new Error(`Journal entry not balanced: Debits ${totalDebits} ≠ Credits ${totalCredits}`);
-    }
-
+    this.assertBalanced(entry.entries);
     const existing = await this.findPostedJournalEntry(tenantId, entry.entry_id);
     if (existing) {
       await this.ensureJournalPostedOutbox(tenantId, existing);
@@ -274,25 +270,33 @@ export class LedgerService {
         return result.entry;
       }
     } else {
+      await this.accounts.assertMemoryPostingsAllowed(
+        tenantId,
+        entry.account_postings || [],
+        entry.entry_id,
+      );
       const lines = await this.postMemoryJournalEntry(tenantId, entry);
       await this.outbox.append(
         this.domainEvents.ledgerJournalPosted({ tenantId, entry, lines }),
       );
     }
 
-    this.auditTrail.record({
-      tenant_id: tenantId,
-      action: 'ledger.entry.posted',
-      entity_type: 'journal_entry',
-      entity_id: entry.entry_id,
-      phase: 'ACT',
-      metadata: {
-        transaction_id: entry.transaction_id,
-        lines: entry.entries.length,
-      },
-    });
+    if (!this.prisma.isConfigured) {
+      this.auditTrail.record(this.journalPostedAudit(tenantId, entry));
+    }
 
     return entry;
+  }
+
+  async postJournalEntryInTransaction(
+    tx: TenantTransaction,
+    tenantId: string,
+    entry: JournalEntry,
+  ): Promise<JournalEntry> {
+    this.assertBalanced(entry.entries);
+    entry.status = 'POSTED';
+    entry.posting_date = new Date();
+    return (await this.postConfiguredJournalEntryWithTransaction(tx, tenantId, entry)).entry;
   }
 
   /**
@@ -389,6 +393,16 @@ export class LedgerService {
     }
 
     await this.store.saveJournalEntry(tenantId, entry);
+    if (entry.account_postings?.length) {
+      await this.accounts.appendMemoryPostings(
+        tenantId,
+        entry.entry_id,
+        entry.transaction_id,
+        entry.posted_by,
+        entry.posting_date,
+        entry.account_postings,
+      );
+    }
     return lines;
   }
 
@@ -396,15 +410,30 @@ export class LedgerService {
     tenantId: string,
     entry: JournalEntry,
   ): Promise<ConfiguredJournalPostResult> {
-    await this.prisma.ensureTenant(tenantId);
+    return this.prisma.withTenant(tenantId, (tx) =>
+      this.postConfiguredJournalEntryWithTransaction(tx, tenantId, entry));
+  }
 
-    return this.prisma.db.$transaction(async (tx: any) => {
-      await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
+  private async postConfiguredJournalEntryWithTransaction(
+    tx: TenantTransaction,
+    tenantId: string,
+    entry: JournalEntry,
+  ): Promise<ConfiguredJournalPostResult> {
       const lines: LedgerJournalPostedPayload['lines'] = [];
 
       const inserted = await tx.$queryRaw<any[]>`
-        INSERT INTO "journal_entries" ("id", "tenantId", "transactionId", "description", "postedBy", "status", "entryDate", "postingDate", "lines", "metadata")
-        VALUES (${entry.entry_id}, ${tenantId}, ${entry.transaction_id}, ${entry.description}, ${entry.posted_by}, ${entry.status}, ${entry.entry_date}, ${entry.posting_date}, CAST(${this.json(entry.entries)} AS jsonb), CAST(${this.json(entry.metadata)} AS jsonb))
+        INSERT INTO "journal_entries" (
+          "id", "tenantId", "transactionId", "description", "postedBy", "status",
+          "entryDate", "postingDate", "lines", "metadata", "adjustmentRequestId",
+          "reversalOfEntryId", "correctionOfEntryId"
+        )
+        VALUES (
+          ${entry.entry_id}, ${tenantId}, ${entry.transaction_id}, ${entry.description},
+          ${entry.posted_by}, ${entry.status}, ${entry.entry_date}, ${entry.posting_date},
+          CAST(${this.json(entry.entries)} AS jsonb), CAST(${this.json(entry.metadata)} AS jsonb),
+          ${entry.adjustment_request_id || null}, ${entry.reversal_of_entry_id || null},
+          ${entry.correction_of_entry_id || null}
+        )
         ON CONFLICT ("tenantId", "id") DO NOTHING
         RETURNING *
       `;
@@ -453,13 +482,33 @@ export class LedgerService {
         lines.push(this.eventLine(line, account.currency));
       }
 
+      if (entry.account_postings?.length) {
+        await this.accounts.appendPostingsInTransaction(
+          tx,
+          tenantId,
+          entry.entry_id,
+          entry.transaction_id,
+          entry.posted_by,
+          entry.posting_date,
+          entry.account_postings,
+        );
+      }
+
       await this.appendOutboxInTransaction(
         tx,
         this.domainEvents.ledgerJournalPosted({ tenantId, entry, lines }),
       );
+      await this.auditTrail.recordInTransaction(tx, this.journalPostedAudit(tenantId, entry));
 
       return { entry: this.journalEntryFromRow(inserted[0]), posted: true };
-    });
+  }
+
+  private assertBalanced(lines: LedgerLine[]): void {
+    const totalDebits = (lines || []).reduce((sum, line) => sum + (line.debit_amount || 0), 0);
+    const totalCredits = (lines || []).reduce((sum, line) => sum + (line.credit_amount || 0), 0);
+    if (lines.length < 2 || Math.abs(totalDebits - totalCredits) > 0.01) {
+      throw new Error(`Journal entry not balanced: Debits ${totalDebits} ≠ Credits ${totalCredits}`);
+    }
   }
 
   private async findPostedJournalEntry(
@@ -472,13 +521,14 @@ export class LedgerService {
       );
     }
 
-    await this.prisma.setTenantContext(tenantId);
-    const [row] = await this.prisma.db.$queryRaw<any[]>`
-      SELECT * FROM "journal_entries"
-      WHERE "tenantId" = ${tenantId} AND "id" = ${entryId} AND "status" = 'POSTED'
-      LIMIT 1
-    `;
-    return row ? this.journalEntryFromRow(row) : undefined;
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const [row] = await tx.$queryRaw<any[]>`
+        SELECT * FROM "journal_entries"
+        WHERE "tenantId" = ${tenantId} AND "id" = ${entryId} AND "status" = 'POSTED'
+        LIMIT 1
+      `;
+      return row ? this.journalEntryFromRow(row) : undefined;
+    });
   }
 
   private async ensureJournalPostedOutbox(tenantId: string, entry: JournalEntry): Promise<void> {
@@ -550,6 +600,24 @@ export class LedgerService {
     `;
   }
 
+  private journalPostedAudit(tenantId: string, entry: JournalEntry) {
+    return {
+      tenant_id: tenantId,
+      action: 'ledger.entry.posted',
+      entity_type: 'journal_entry',
+      entity_id: entry.entry_id,
+      stage: 'POSTED' as const,
+      result: 'SUCCEEDED' as const,
+      source: 'SYSTEM' as const,
+      actor_id: entry.posted_by,
+      metadata: {
+        transaction_id: entry.transaction_id,
+        lines: entry.entries.length,
+        account_entries: entry.account_postings?.length || 0,
+      },
+    };
+  }
+
   private journalEntryFromRow(row: any): JournalEntry {
     return {
       entry_id: row.id,
@@ -561,6 +629,9 @@ export class LedgerService {
       entries: this.parseJson(row.lines),
       status: row.status as JournalEntry['status'],
       metadata: this.parseJson(row.metadata),
+      adjustment_request_id: row.adjustmentRequestId || undefined,
+      reversal_of_entry_id: row.reversalOfEntryId || undefined,
+      correction_of_entry_id: row.correctionOfEntryId || undefined,
     };
   }
 

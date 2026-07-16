@@ -12,6 +12,7 @@ import { SchemasController } from '../src/controllers/schemas.controller';
 import { WorkflowsController } from '../src/controllers/workflows.controller';
 import { ProductType } from '../src/products/product-config.service';
 import { RulesEngineService, RuleType } from '../src/rules-engine/rules-engine.service';
+import { PrismaService } from '../src/services/prisma.service';
 
 describe('fengine - Integration Tests (app composition)', () => {
   let app: INestApplication;
@@ -49,6 +50,16 @@ describe('fengine - Integration Tests (app composition)', () => {
     rulesEngine = app.get(RulesEngineService);
     schemasController = app.get(SchemasController);
     workflowsController = app.get(WorkflowsController);
+
+    const prisma = app.get(PrismaService);
+    await prisma.bindTenantReference({
+      tenantId,
+      institutionId: 'test_institution_001',
+    });
+    await prisma.bindTenantReference({
+      tenantId: 'test_inst_002',
+      institutionId: 'test_institution_002',
+    });
   });
 
   afterAll(async () => {
@@ -64,7 +75,7 @@ describe('fengine - Integration Tests (app composition)', () => {
 
     it('metrics returns prometheus payload', async () => {
       const metrics = await metricsService.metrics();
-      expect(metrics).toContain('http_requests_total');
+      expect(metrics).toContain('ledger_core_http_requests_total');
     });
   });
 
@@ -88,12 +99,37 @@ describe('fengine - Integration Tests (app composition)', () => {
     });
 
     it('creates account for tenant', async () => {
-      const res = await accountsController.create(
+      await productsController.upsert(
         { tenantId },
-        { name: 'Test Account', balance: 1000 },
+        {
+          type: ProductType.CHECKING,
+          config: {
+            product_id: 'prod_api_account',
+            name: 'API Current Account',
+            enabled: true,
+          },
+        },
+      );
+      const res = await accountsController.create(
+        {
+          tenantId,
+          identity: {
+            sub: 'operator-maker',
+            roles: ['operations_maker'],
+            institution_id: 'test_institution_001',
+          },
+          headers: {},
+        },
+        {
+          customer_id: 'customer-account-api',
+          product_id: 'prod_api_account',
+          name: 'Test Account',
+          currency: 'MZN',
+        },
       );
       expect(res).toHaveProperty('id');
       expect(res.name).toBe('Test Account');
+      expect(res.balance).toBe('0.00');
     });
   });
 
@@ -212,6 +248,21 @@ describe('fengine - Integration Tests (app composition)', () => {
       );
       const exported = await schemasController.export({ tenantId }, schema.entity_id);
       expect(exported.entity_name).toBe('api_customer_profile');
+    });
+
+    it('does not export a schema through another tenant context', async () => {
+      const schema = await schemasController.create(
+        { tenantId },
+        {
+          entity_name: 'tenant_private_export',
+          display_name: 'Tenant Private Export',
+          fields: [{ name: 'reference', type: 'STRING', required: true }],
+        },
+      );
+
+      await expect(
+        schemasController.export({ tenantId: 'test_inst_002' }, schema.entity_id),
+      ).rejects.toThrow('Schema not found');
     });
 
     it('creates and executes workflows', async () => {

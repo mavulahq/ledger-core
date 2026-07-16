@@ -6,6 +6,7 @@
 
 import { Controller, Get, Res } from '@nestjs/common';
 import { MetricsService } from './metrics.service';
+import { Public } from '../auth/public.decorator';
 import { RequirePermissions } from '../auth/permissions.decorator';
 
 @Controller()
@@ -13,6 +14,7 @@ export class MetricsController {
   constructor(private readonly metricsService: MetricsService) {}
 
   @Get('metrics')
+  @Public()
   @RequirePermissions('observability.read')
   async metrics(@Res() res: any) {
     const body = await this.metricsService.metrics();

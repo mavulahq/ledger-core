@@ -28,18 +28,14 @@ describe('ledger posting persistence', () => {
       $queryRaw: jest
         .fn()
         .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
         .mockResolvedValueOnce([existingEntry])
         .mockResolvedValueOnce([{ currency: 'MZN' }])
         .mockResolvedValueOnce([{ currency: 'MZN' }]),
     };
     const prisma = {
       isConfigured: true,
-      ensureTenant: jest.fn().mockResolvedValue(undefined),
-      setTenantContext: jest.fn().mockResolvedValue(undefined),
-      db: {
-        $queryRaw: jest.fn().mockResolvedValue([]),
-        $transaction: jest.fn(async (handler: (transaction: any) => Promise<unknown>) => handler(tx)),
-      },
+      withTenant: jest.fn(async (_tenantId: string, handler: (transaction: any) => Promise<unknown>) => handler(tx)),
     };
     const auditTrail = { record: jest.fn() };
     const service = new LedgerService(
@@ -48,6 +44,11 @@ describe('ledger posting persistence', () => {
       auditTrail as any,
       new DomainEventFactory(),
       new DomainOutboxService({ isConfigured: false } as any),
+      {
+        assertMemoryPostingsAllowed: jest.fn(),
+        appendMemoryPostings: jest.fn(),
+        appendPostingsInTransaction: jest.fn(),
+      } as any,
     );
 
     const result = await service.postJournalEntry(tenantId, {

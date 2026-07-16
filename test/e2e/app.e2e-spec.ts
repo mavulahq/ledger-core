@@ -39,13 +39,20 @@ describe('ledger-core (e2e)', () => {
       idempotency_key: 'e2e-loan-approved',
       payload: { loan_id: 'loan_e2e' },
     };
-    const created = await internalWorkerController.enqueue(payload);
+    const request = { tenantId: 'tenant_e2e' };
+    const created = await internalWorkerController.enqueue(request, payload);
     expect(created).toMatchObject({
-      id: 'ledger-core-e2e-loan-approved',
       status: 'QUEUED',
     });
 
-    await expect(internalWorkerController.get(created.id)).resolves.toMatchObject({ id: created.id });
+    await expect(internalWorkerController.get(request, created.id)).resolves.toMatchObject({ id: created.id });
+  });
+
+  it('rejects a worker payload from another tenant', () => {
+    expect(() => internalWorkerController.enqueue(
+      { tenantId: 'tenant_e2e' },
+      { tenant_id: 'tenant_other', event_type: 'LOAN_APPROVED', payload: {} },
+    )).toThrow('Authenticated tenant context does not match the request');
   });
 
   it('/api/health (GET)', async () => {
