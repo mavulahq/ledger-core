@@ -12,8 +12,7 @@ import { SchemasController } from '../src/controllers/schemas.controller';
 import { WorkflowsController } from '../src/controllers/workflows.controller';
 import { ProductType } from '../src/products/product-config.service';
 import { RulesEngineService, RuleType } from '../src/rules-engine/rules-engine.service';
-import { TenantMiddleware } from '../src/middleware/tenant.middleware';
-import { exposeCsrfToken } from '../src/middleware/csrf.middleware';
+import { PrismaService } from '../src/services/prisma.service';
 
 describe('fengine - Integration Tests (app composition)', () => {
   let app: INestApplication;
@@ -30,6 +29,9 @@ describe('fengine - Integration Tests (app composition)', () => {
   const tenantId = 'test_inst_001';
 
   beforeAll(async () => {
+    process.env.OIDC_ISSUER = 'https://identity.mavula.io';
+    process.env.OIDC_AUDIENCE = 'urn:mavula:ledger-core';
+    process.env.OIDC_JWKS_URI = 'https://identity.mavula.io/jwks';
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -48,6 +50,16 @@ describe('fengine - Integration Tests (app composition)', () => {
     rulesEngine = app.get(RulesEngineService);
     schemasController = app.get(SchemasController);
     workflowsController = app.get(WorkflowsController);
+
+    const prisma = app.get(PrismaService);
+    await prisma.bindTenantReference({
+      tenantId,
+      institutionId: 'test_institution_001',
+    });
+    await prisma.bindTenantReference({
+      tenantId: 'test_inst_002',
+      institutionId: 'test_institution_002',
+    });
   });
 
   afterAll(async () => {
@@ -63,52 +75,20 @@ describe('fengine - Integration Tests (app composition)', () => {
 
     it('metrics returns prometheus payload', async () => {
       const metrics = await metricsService.metrics();
-      expect(metrics).toContain('http_requests_total');
+      expect(metrics).toContain('ledger_core_http_requests_total');
     });
   });
 
   describe('Authentication', () => {
-    it('login returns token in default mode', async () => {
-      const res = await authController.login(
-        { username: 'testuser', roles: ['USER'] },
-        { cookie: jest.fn() },
-      );
-      expect(res).toHaveProperty('access_token');
-    });
-
-    it('login sets cookie in cookie mode', async () => {
-      process.env.USE_HTTP_ONLY_COOKIE = 'true';
-      const resMock = { cookie: jest.fn() };
-      const res = await authController.login(
-        { username: 'testuser', roles: ['ADMIN'] },
-        resMock,
-      );
-      expect(res).toEqual({ status: 'ok' });
-      expect(resMock.cookie).toHaveBeenCalled();
-      delete process.env.USE_HTTP_ONLY_COOKIE;
-    });
-
-    it('csrf helper returns token when request provides csrfToken', () => {
-      const token = exposeCsrfToken({
-        csrfToken: () => 'test-csrf-token',
-      } as any);
-      expect(token).toBe('test-csrf-token');
+    it('legacy login is retired without issuing a token', () => {
+      expect(() => authController.login()).toThrow('Local login has been retired');
     });
   });
 
   describe('Tenant Isolation', () => {
-    it('Tenant ID extracted from X-Tenant-ID header', () => {
-      const req: any = { headers: { 'x-tenant-id': tenantId }, query: {} };
-      const res: any = {};
-      new TenantMiddleware().use(req, res, jest.fn());
-      expect(req.tenantId).toBe(tenantId);
-    });
-
-    it('Tenant ID extracted from query param', () => {
-      const req: any = { headers: {}, query: { tenant_id: tenantId } };
-      const res: any = {};
-      new TenantMiddleware().use(req, res, jest.fn());
-      expect(req.tenantId).toBe(tenantId);
+    it('controllers require the tenant supplied by the authenticated request context', async () => {
+      const accounts = await accountsController.list({ tenantId });
+      expect(Array.isArray(accounts)).toBe(true);
     });
   });
 
@@ -119,12 +99,37 @@ describe('fengine - Integration Tests (app composition)', () => {
     });
 
     it('creates account for tenant', async () => {
-      const res = await accountsController.create(
+      await productsController.upsert(
         { tenantId },
-        { name: 'Test Account', balance: 1000 },
+        {
+          type: ProductType.CHECKING,
+          config: {
+            product_id: 'prod_api_account',
+            name: 'API Current Account',
+            enabled: true,
+          },
+        },
+      );
+      const res = await accountsController.create(
+        {
+          tenantId,
+          identity: {
+            sub: 'operator-maker',
+            roles: ['operations_maker'],
+            institution_id: 'test_institution_001',
+          },
+          headers: {},
+        },
+        {
+          customer_id: 'customer-account-api',
+          product_id: 'prod_api_account',
+          name: 'Test Account',
+          currency: 'MZN',
+        },
       );
       expect(res).toHaveProperty('id');
       expect(res.name).toBe('Test Account');
+      expect(res.balance).toBe('0.00');
     });
   });
 
@@ -243,6 +248,21 @@ describe('fengine - Integration Tests (app composition)', () => {
       );
       const exported = await schemasController.export({ tenantId }, schema.entity_id);
       expect(exported.entity_name).toBe('api_customer_profile');
+    });
+
+    it('does not export a schema through another tenant context', async () => {
+      const schema = await schemasController.create(
+        { tenantId },
+        {
+          entity_name: 'tenant_private_export',
+          display_name: 'Tenant Private Export',
+          fields: [{ name: 'reference', type: 'STRING', required: true }],
+        },
+      );
+
+      await expect(
+        schemasController.export({ tenantId: 'test_inst_002' }, schema.entity_id),
+      ).rejects.toThrow('Schema not found');
     });
 
     it('creates and executes workflows', async () => {

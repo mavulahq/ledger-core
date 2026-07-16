@@ -37,9 +37,13 @@ jobs:
           --health-cmd "redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=5
     env:
       DATABASE_URL: postgresql://mavula:mavula_dev@127.0.0.1:5432/mavula?schema=public
+      LEDGER_CORE_MIGRATION_DATABASE_URL: postgresql://mavula:mavula_dev@127.0.0.1:5432/mavula?schema=public
+      LEDGER_CORE_DATABASE_ROLE_PASSWORD: mavula_ledger_ci_password
       REDIS_URL: redis://127.0.0.1:6379
-      INTERNAL_API_KEY: guardian-internal-api-key
-      JWT_SECRET: guardian-jwt-secret
+      OIDC_ISSUER: https://identity.example.test
+      OIDC_AUTHORIZATION_ENDPOINT: https://identity.example.test/auth
+      OIDC_AUDIENCE: urn:mavula:ledger-core
+      OIDC_JWKS_URI: https://identity.example.test/jwks
     steps:
       - uses: actions/checkout@v6
       - name: Setup pnpm
@@ -56,7 +60,13 @@ jobs:
         run: pnpm guardian:check
       - name: Build
         run: pnpm build
-      - name: Apply database schema
-        run: pnpm prisma db push --schema prisma/schema.prisma
+      - name: Apply database migrations
+        run: |
+          pnpm database:migrate
+          pnpm database:provision-role
       - name: Test
         run: pnpm test:all
+      - name: Test tenant RLS
+        env:
+          DATABASE_URL: postgresql://ledger_core_app:mavula_ledger_ci_password@127.0.0.1:5432/mavula?schema=public&connection_limit=1
+        run: pnpm test:rls

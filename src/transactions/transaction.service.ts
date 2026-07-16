@@ -1,12 +1,7 @@
 /*
- * mavula.io - Transaction Processing & Payment Settlement Engine
- * Copyright (c) 2025 mavula.io
- * 
- * Author: EstandarMustaq <estandarmustaq@mavula.io>
- * License: Proprietary - See LICENSE file
- * 
- * Real-time transaction processing, settlement, reconciliation
- * Multi-currency, dual-ledger (GL + customer account)
+ * mavula.io - Transaction Processing
+ * Copyright (c) 2025-2026 mavula.io
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 import { Injectable } from '@nestjs/common';
@@ -66,6 +61,9 @@ export interface Transaction {
   reversed_at?: Date;
   created_by: string;
   metadata: Record<string, any>;
+  adjustment_request_id?: string;
+  reversal_of_transaction_id?: string;
+  correction_of_transaction_id?: string;
 }
 
 export interface SettlementResult {
@@ -161,8 +159,7 @@ export class TransactionService {
         fee_payment: allocation.fee_payment,
       });
 
-      // Step 6: Update customer account
-      // In production: UPDATE accounts SET balance = balance - principal WHERE id = account_id
+      // Customer-account balances are changed only by journal-backed account postings.
 
       const result: SettlementResult = {
         transaction_id: txnId,
@@ -201,7 +198,9 @@ export class TransactionService {
         action: 'transaction.payment.posted',
         entity_type: 'transaction',
         entity_id: txnId,
-        phase: 'ACT',
+        stage: 'POSTED',
+        result: 'SUCCEEDED',
+        source: 'SYSTEM',
         metadata: {
           loan_id: params.loanId,
           payment_amount: params.paymentAmount,
@@ -294,7 +293,9 @@ export class TransactionService {
         action: 'transaction.disbursement.posted',
         entity_type: 'transaction',
         entity_id: txnId,
-        phase: 'ACT',
+        stage: 'POSTED',
+        result: 'SUCCEEDED',
+        source: 'SYSTEM',
         metadata: {
           customer_id: params.customerId,
           principal: params.principal,
@@ -360,7 +361,9 @@ export class TransactionService {
       action: 'transaction.reversed',
       entity_type: 'transaction',
       entity_id: transactionId,
-      phase: 'ACT',
+      stage: 'POSTED',
+      result: 'REVERSED',
+      source: 'SYSTEM',
       metadata: {},
     });
 

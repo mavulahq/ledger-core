@@ -5,10 +5,14 @@
  */
 
 import { Module } from '@nestjs/common';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { AccountsController } from './controllers/accounts.controller';
+import { AccountLifecycleController } from './controllers/account-lifecycle.controller';
+import { FinancialAdjustmentsController } from './controllers/financial-adjustments.controller';
+import { FinancialAdjustmentsService } from './adjustments/financial-adjustments.service';
 import { ProductsController } from './controllers/products.controller';
 import { ProjectionsController } from './controllers/projections.controller';
 import { RulesController } from './controllers/rules.controller';
@@ -33,14 +37,22 @@ import { RulesEngineService } from './rules-engine/rules-engine.service';
 import { SchemaManagerService } from './schema-manager/schema-manager.service';
 import { TransactionService } from './transactions/transaction.service';
 import { EngineEventService } from './worker/engine-event.service';
-import { InternalApiKeyGuard } from './worker/internal-api-key.guard';
+import { AccessTokenGuard } from './auth/access-token.guard';
+import { TenantBoundaryGuard } from './auth/tenant-boundary.guard';
+import { PermissionsGuard } from './auth/permissions.guard';
 import { WorkerQueueService } from './worker/worker-queue.service';
+import { IdempotencyService } from './idempotency/idempotency.service';
+import { IdempotencyInterceptor } from './idempotency/idempotency.interceptor';
+import { HttpMetricsInterceptor } from './metrics/http-metrics.interceptor';
+import { RegulatoryExportSourceService } from './regulatory/regulatory-export-source.service';
 
 @Module({
   imports: [AuthModule],
   controllers: [
     AppController,
     AccountsController,
+    AccountLifecycleController,
+    FinancialAdjustmentsController,
     ProductsController,
     ProjectionsController,
     RulesController,
@@ -52,6 +64,7 @@ import { WorkerQueueService } from './worker/worker-queue.service';
   providers: [
     AppService,
     AccountsService,
+    FinancialAdjustmentsService,
     PrismaService,
     MetricsService,
     FengineStoreService,
@@ -69,7 +82,13 @@ import { WorkerQueueService } from './worker/worker-queue.service';
     DomainOutboxService,
     DomainInboxService,
     DomainOutboxPublisherService,
-    InternalApiKeyGuard,
+    RegulatoryExportSourceService,
+    IdempotencyService,
+    { provide: APP_GUARD, useClass: AccessTokenGuard },
+    { provide: APP_GUARD, useClass: TenantBoundaryGuard },
+    { provide: APP_GUARD, useClass: PermissionsGuard },
+    { provide: APP_INTERCEPTOR, useClass: HttpMetricsInterceptor },
+    { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
   ],
 })
 export class AppModule {}

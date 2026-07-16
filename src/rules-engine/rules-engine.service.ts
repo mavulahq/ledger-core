@@ -286,7 +286,7 @@ export class RulesEngineService {
       updated_at: new Date(),
     });
 
-    this.rules.set(productId, rules);
+    this.rules.set(this.cacheKey(tenantId, productId), rules);
     await this.store.saveRules(tenantId, productId, rules);
 
     return rules;
@@ -297,9 +297,11 @@ export class RulesEngineService {
    */
   async evaluateRules(productId: string, context: EvaluationContext): Promise<RuleEvaluationResult[]> {
     const results: RuleEvaluationResult[] = [];
-    const tenantId = context.tenant_id || process.env.APP_CURRENT_TENANT || 'public';
-    const productRules = this.rules.get(productId) || await this.store.listRules(productId, tenantId);
-    this.rules.set(productId, productRules);
+    const tenantId = context.tenant_id;
+    if (!tenantId) throw new Error('tenant_id is required to evaluate rules');
+    const key = this.cacheKey(tenantId, productId);
+    const productRules = this.rules.get(key) || await this.store.listRules(productId, tenantId);
+    this.rules.set(key, productRules);
     const normalizedContext: EvaluationContext = {
       customer_kyc_status: 'VERIFIED',
       ...context,
@@ -348,7 +350,9 @@ export class RulesEngineService {
         action: 'rules.evaluated',
         entity_type: 'rules',
         entity_id: productId,
-        phase: 'ORIENT',
+        stage: 'EVALUATED',
+        result: 'SUCCEEDED',
+        source: 'SYSTEM',
         metadata: {
           stage: normalizedContext.stage || 'UNSPECIFIED',
           passed: results.filter((item) => item.passed).length,
@@ -401,17 +405,20 @@ export class RulesEngineService {
    * Add custom rule for specific product
    */
   async addRule(tenantId: string, rule: Rule): Promise<void> {
-    if (!this.rules.has(rule.product_id)) {
-      this.rules.set(rule.product_id, []);
+    const key = this.cacheKey(tenantId, rule.product_id);
+    if (!this.rules.has(key)) {
+      this.rules.set(key, []);
     }
-    this.rules.get(rule.product_id)!.push(rule);
+    this.rules.get(key)!.push(rule);
     await this.store.saveRule(tenantId, rule);
     this.auditTrail.record({
       tenant_id: tenantId,
       action: 'rule.created',
       entity_type: 'rule',
       entity_id: rule.id,
-      phase: 'ACT',
+      stage: 'CONFIGURED',
+      result: 'SUCCEEDED',
+      source: 'SYSTEM',
       metadata: { product_id: rule.product_id, rule_type: rule.rule_type },
     });
   }
@@ -419,33 +426,41 @@ export class RulesEngineService {
   /**
    * Update rule
    */
-  async updateRule(productId: string, ruleId: string, updates: Partial<Rule>): Promise<void> {
-    const rules = this.rules.get(productId) || [];
+  async updateRule(tenantId: string, productId: string, ruleId: string, updates: Partial<Rule>): Promise<void> {
+    const key = this.cacheKey(tenantId, productId);
+    const rules = this.rules.get(key) || await this.store.listRules(productId, tenantId);
     const idx = rules.findIndex(r => r.id === ruleId);
     if (idx >= 0) {
-      rules[idx] = { ...rules[idx], ...updates, updated_at: new Date() };
-      await this.store.saveRule(rules[idx].tenant_id, rules[idx]);
+      rules[idx] = { ...rules[idx], ...updates, tenant_id: tenantId, product_id: productId, updated_at: new Date() };
+      this.rules.set(key, rules);
+      await this.store.saveRule(tenantId, rules[idx]);
     }
   }
 
   /**
    * Delete rule
    */
-  async deleteRule(productId: string, ruleId: string): Promise<void> {
-    const rules = this.rules.get(productId) || [];
+  async deleteRule(tenantId: string, productId: string, ruleId: string): Promise<void> {
+    const key = this.cacheKey(tenantId, productId);
+    const rules = this.rules.get(key) || await this.store.listRules(productId, tenantId);
     this.rules.set(
-      productId,
+      key,
       rules.filter(r => r.id !== ruleId)
     );
-    await this.store.deleteRule(productId, ruleId);
+    await this.store.deleteRule(tenantId, productId, ruleId);
   }
 
   /**
    * Get all rules for product
    */
-  async getRules(productId: string, tenantId?: string): Promise<Rule[]> {
-    const rules = this.rules.get(productId) || await this.store.listRules(productId, tenantId);
-    this.rules.set(productId, rules);
+  async getRules(productId: string, tenantId: string): Promise<Rule[]> {
+    const key = this.cacheKey(tenantId, productId);
+    const rules = this.rules.get(key) || await this.store.listRules(productId, tenantId);
+    this.rules.set(key, rules);
     return rules;
+  }
+
+  private cacheKey(tenantId: string, productId: string): string {
+    return `${tenantId}:${productId}`;
   }
 }

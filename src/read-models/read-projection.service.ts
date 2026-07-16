@@ -58,9 +58,9 @@ export class ReadProjectionService {
   }
 
   async rebuild(input: {
-    tenantId?: string;
+    tenantId: string;
     projectionName?: ReadProjectionName;
-  } = {}): Promise<ProjectionRebuildResult> {
+  }): Promise<ProjectionRebuildResult> {
     const projectionNames = input.projectionName ? [input.projectionName] : [...READ_PROJECTION_NAMES];
     await this.clear(input.tenantId, projectionNames);
 
@@ -105,13 +105,14 @@ export class ReadProjectionService {
         .sort((left, right) => right.updated_at.getTime() - left.updated_at.getTime());
     }
 
-    await this.enterTenant(tenantId);
-    const rows = await this.prisma.db.$queryRaw<any[]>`
-      SELECT * FROM "read_projections"
-      WHERE "tenantId" = ${tenantId} AND "projectionName" = ${projectionName}
-      ORDER BY "updatedAt" DESC
-    `;
-    return rows.map((row) => this.projectionFromRow(row));
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const rows = await tx.$queryRaw<any[]>`
+        SELECT * FROM "read_projections"
+        WHERE "tenantId" = ${tenantId} AND "projectionName" = ${projectionName}
+        ORDER BY "updatedAt" DESC
+      `;
+      return rows.map((row) => this.projectionFromRow(row));
+    });
   }
 
   async get(
@@ -123,44 +124,37 @@ export class ReadProjectionService {
       return this.memory.get(this.key(tenantId, projectionName, entityId));
     }
 
-    await this.enterTenant(tenantId);
-    const [row] = await this.prisma.db.$queryRaw<any[]>`
-      SELECT * FROM "read_projections"
-      WHERE "tenantId" = ${tenantId}
-        AND "projectionName" = ${projectionName}
-        AND "entityId" = ${entityId}
-      LIMIT 1
-    `;
-    return row ? this.projectionFromRow(row) : undefined;
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const [row] = await tx.$queryRaw<any[]>`
+        SELECT * FROM "read_projections"
+        WHERE "tenantId" = ${tenantId}
+          AND "projectionName" = ${projectionName}
+          AND "entityId" = ${entityId}
+        LIMIT 1
+      `;
+      return row ? this.projectionFromRow(row) : undefined;
+    });
   }
 
-  async status(tenantId?: string): Promise<{
+  async status(tenantId: string): Promise<{
     status: 'ok';
     projections: ProjectionCheckpoint[];
   }> {
     if (!this.prisma.isConfigured) {
       const projections = [...this.checkpoints.values()]
-        .filter((checkpoint) => !tenantId || checkpoint.tenant_id === tenantId)
+        .filter((checkpoint) => checkpoint.tenant_id === tenantId)
         .sort((left, right) => left.projection_name.localeCompare(right.projection_name));
       return { status: 'ok', projections };
     }
 
-    if (tenantId) {
-      await this.enterTenant(tenantId);
-    } else {
-      await this.prisma.setTenantContext('*');
-    }
-    const rows = tenantId
-      ? await this.prisma.db.$queryRaw<any[]>`
-          SELECT * FROM "projection_checkpoints"
-          WHERE "tenantId" = ${tenantId}
-          ORDER BY "projectionName" ASC
-        `
-      : await this.prisma.db.$queryRaw<any[]>`
-          SELECT * FROM "projection_checkpoints"
-          ORDER BY "tenantId" ASC, "projectionName" ASC
-        `;
-    return { status: 'ok', projections: rows.map((row) => this.checkpointFromRow(row)) };
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const rows = await tx.$queryRaw<any[]>`
+        SELECT * FROM "projection_checkpoints"
+        WHERE "tenantId" = ${tenantId}
+        ORDER BY "projectionName" ASC
+      `;
+      return { status: 'ok' as const, projections: rows.map((row) => this.checkpointFromRow(row)) };
+    });
   }
 
   projectionName(value: string): ReadProjectionName {
@@ -204,11 +198,8 @@ export class ReadProjectionService {
     event: DomainEventEnvelope,
     target: ProjectionTarget,
   ): Promise<ProjectionApplyResult> {
-    await this.prisma.ensureTenant(event.tenant_id);
-
     try {
-      return await this.prisma.db.$transaction(async (tx: any) => {
-        await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${event.tenant_id}, true)`;
+      return await this.prisma.withTenant(event.tenant_id, async (tx) => {
         const processing = await this.startInboxProcessing(tx, event);
         if (!processing.started) {
           return {
@@ -315,19 +306,11 @@ export class ReadProjectionService {
         return this.loanActivity(event, existing, 'DISBURSED');
       case 'lending.payment_posted':
         return this.loanActivity(event, existing, 'PAYMENT_POSTED');
+      case 'lending.adjustment_applied':
+        return this.loanAdjustmentActivity(event, existing);
       case 'ledger.journal_posted':
-        return {
-          journal_entry_id: event.payload.journal_entry_id,
-          transaction_id: event.payload.transaction_id,
-          posted_at: event.payload.posted_at,
-          line_count: event.payload.line_count,
-          totals: event.payload.totals,
-          lines: event.payload.lines,
-          latest_event_id: event.event_id,
-          latest_event_type: event.event_type,
-          latest_event_version: event.event_version,
-          latest_occurred_at: event.occurred_at,
-        };
+      case 'ledger.adjustment_posted':
+        return this.ledgerActivity(event, existing);
       case 'products.configuration_published':
         return this.productPublication(event, existing);
       default:
@@ -362,6 +345,66 @@ export class ReadProjectionService {
       latest_event_version: latest.event_version,
       latest_occurred_at: latest.occurred_at,
       publications,
+    };
+  }
+
+  private ledgerActivity(
+    event: DomainEventEnvelope,
+    existing: Record<string, any>,
+  ): Record<string, any> {
+    const next = event.event_type === 'ledger.journal_posted'
+      ? {
+          event_id: event.event_id,
+          event_type: event.event_type,
+          event_version: event.event_version,
+          aggregate_version: event.aggregate.version,
+          occurred_at: event.occurred_at,
+          journal_entry_id: event.payload.journal_entry_id,
+          transaction_id: event.payload.transaction_id,
+          posted_at: event.payload.posted_at,
+          line_count: event.payload.line_count,
+          totals: event.payload.totals,
+          lines: event.payload.lines,
+        }
+      : {
+          event_id: event.event_id,
+          event_type: event.event_type,
+          event_version: event.event_version,
+          aggregate_version: event.aggregate.version,
+          occurred_at: event.occurred_at,
+          adjustment_request_id: event.payload.adjustment_request_id,
+          adjustment_type: event.payload.adjustment_type,
+          target_journal_entry_id: event.payload.target_journal_entry_id,
+          reversal_journal_entry_id: event.payload.reversal_journal_entry_id,
+          replacement_journal_entry_id: event.payload.replacement_journal_entry_id,
+          adjusted_at: event.payload.applied_at,
+        };
+    const events = this.appendUnique(existing.events || [], next);
+    const journal = [...events].reverse().find((entry) => entry.event_type === 'ledger.journal_posted');
+    const adjustment = [...events].reverse().find((entry) => entry.event_type === 'ledger.adjustment_posted');
+    const latest = events[events.length - 1];
+    return {
+      ...(journal ? {
+        journal_entry_id: journal.journal_entry_id,
+        transaction_id: journal.transaction_id,
+        posted_at: journal.posted_at,
+        line_count: journal.line_count,
+        totals: journal.totals,
+        lines: journal.lines,
+      } : {}),
+      ...(adjustment ? {
+        adjustment_request_id: adjustment.adjustment_request_id,
+        adjustment_type: adjustment.adjustment_type,
+        reversal_journal_entry_id: adjustment.reversal_journal_entry_id,
+        replacement_journal_entry_id: adjustment.replacement_journal_entry_id,
+        adjusted_at: adjustment.adjusted_at,
+      } : {}),
+      latest_event_id: latest.event_id,
+      latest_event_type: latest.event_type,
+      latest_event_version: latest.event_version,
+      latest_occurred_at: latest.occurred_at,
+      event_count: events.length,
+      events,
     };
   }
 
@@ -402,13 +445,60 @@ export class ReadProjectionService {
     };
   }
 
+  private loanAdjustmentActivity(
+    event: DomainEventEnvelope,
+    existing: Record<string, any>,
+  ): Record<string, any> {
+    const activities = this.appendUnique(existing.activities || [], {
+      event_id: event.event_id,
+      event_type: event.event_type,
+      event_version: event.event_version,
+      aggregate_version: event.aggregate.version,
+      occurred_at: event.occurred_at,
+      transaction_id: event.payload.replacement_transaction_id || event.payload.reversal_transaction_id,
+      original_transaction_id: event.payload.original_transaction_id,
+      activity_type: `${event.payload.operation}_${event.payload.adjustment_type}`,
+      adjustment_request_id: event.payload.adjustment_request_id,
+      adjustment_type: event.payload.adjustment_type,
+      money: event.payload.money,
+      allocation: event.payload.allocation,
+      balance_after: event.payload.balance_after,
+      loan_status: event.payload.loan_status,
+    });
+    const latest = activities[activities.length - 1];
+    const disbursement = [...activities]
+      .reverse()
+      .find((activity) => activity.event_type === 'lending.loan_disbursed');
+    return {
+      ...existing,
+      loan_id: event.aggregate.id,
+      latest_activity_type: latest.activity_type,
+      latest_transaction_id: latest.transaction_id,
+      latest_event_id: latest.event_id,
+      latest_event_type: latest.event_type,
+      latest_event_version: latest.event_version,
+      latest_occurred_at: latest.occurred_at,
+      currency: event.payload.money.currency,
+      disbursed_amount: event.payload.operation === 'LOAN_DISBURSEMENT'
+        ? (event.payload.adjustment_type === 'REVERSAL' ? '0.00' : event.payload.money.amount)
+        : disbursement?.money?.amount || existing.disbursed_amount,
+      balance_after: event.payload.balance_after,
+      loan_status: event.payload.loan_status,
+      activity_count: activities.length,
+      activities,
+    };
+  }
+
   private targetFor(event: DomainEventEnvelope): ProjectionTarget | undefined {
     switch (event.event_type) {
       case 'lending.loan_disbursed':
       case 'lending.payment_posted':
+      case 'lending.adjustment_applied':
         return { projectionName: 'loan_activity', entityId: event.aggregate.id, entityType: 'loan' };
       case 'ledger.journal_posted':
         return { projectionName: 'ledger_activity', entityId: event.payload.journal_entry_id, entityType: 'journal_entry' };
+      case 'ledger.adjustment_posted':
+        return { projectionName: 'ledger_activity', entityId: event.payload.target_journal_entry_id, entityType: 'journal_entry' };
       case 'products.configuration_published':
         return { projectionName: 'product_publication', entityId: event.payload.product_id, entityType: 'product_configuration' };
       default:
@@ -416,13 +506,13 @@ export class ReadProjectionService {
     }
   }
 
-  private async clear(tenantId: string | undefined, projectionNames: ReadProjectionName[]): Promise<void> {
+  private async clear(tenantId: string, projectionNames: ReadProjectionName[]): Promise<void> {
     if (!this.prisma.isConfigured) {
       for (const key of [...this.memory.keys()]) {
         const record = this.memory.get(key);
         if (
           record &&
-          (!tenantId || record.tenant_id === tenantId) &&
+          record.tenant_id === tenantId &&
           projectionNames.includes(record.projection_name)
         ) {
           this.memory.delete(key);
@@ -432,7 +522,7 @@ export class ReadProjectionService {
         const checkpoint = this.checkpoints.get(key);
         if (
           checkpoint &&
-          (!tenantId || checkpoint.tenant_id === tenantId) &&
+          checkpoint.tenant_id === tenantId &&
           projectionNames.includes(checkpoint.projection_name)
         ) {
           this.checkpoints.delete(key);
@@ -441,32 +531,18 @@ export class ReadProjectionService {
       return;
     }
 
-    if (tenantId) {
-      await this.enterTenant(tenantId);
+    await this.prisma.withTenant(tenantId, async (tx) => {
       for (const projectionName of projectionNames) {
-        await this.prisma.db.$executeRaw`
+        await tx.$executeRaw`
           DELETE FROM "read_projections"
           WHERE "tenantId" = ${tenantId} AND "projectionName" = ${projectionName}
         `;
-        await this.prisma.db.$executeRaw`
+        await tx.$executeRaw`
           DELETE FROM "projection_checkpoints"
           WHERE "tenantId" = ${tenantId} AND "projectionName" = ${projectionName}
         `;
       }
-      return;
-    }
-
-    await this.prisma.setTenantContext('*');
-    for (const projectionName of projectionNames) {
-      await this.prisma.db.$executeRaw`
-        DELETE FROM "read_projections"
-        WHERE "projectionName" = ${projectionName}
-      `;
-      await this.prisma.db.$executeRaw`
-        DELETE FROM "projection_checkpoints"
-        WHERE "projectionName" = ${projectionName}
-      `;
-    }
+    });
   }
 
   private updateMemoryCheckpoint(
@@ -576,7 +652,8 @@ export class ReadProjectionService {
   ): ProjectionEventEntry {
     const latest =
       data.activities?.[data.activities.length - 1] ||
-      data.publications?.[data.publications.length - 1];
+      data.publications?.[data.publications.length - 1] ||
+      data.events?.[data.events.length - 1];
     if (latest) {
       const eventId = latest.event_id || data.latest_event_id;
       const eventType =
@@ -627,8 +704,17 @@ export class ReadProjectionService {
     if (entry.activity_type === 'PAYMENT_POSTED') {
       return 'lending.payment_posted';
     }
+    if (entry.adjustment_type) {
+      return 'lending.adjustment_applied';
+    }
     if (entry.configuration_version !== undefined) {
       return 'products.configuration_published';
+    }
+    if (entry.adjustment_request_id && entry.reversal_journal_entry_id) {
+      return 'ledger.adjustment_posted';
+    }
+    if (entry.journal_entry_id && entry.transaction_id) {
+      return 'ledger.journal_posted';
     }
     return undefined;
   }
@@ -654,7 +740,8 @@ export class ReadProjectionService {
     return (
       data.latest_event_id === eventId ||
       Boolean(data.activities?.some((entry: ProjectionEventEntry) => entry.event_id === eventId)) ||
-      Boolean(data.publications?.some((entry: ProjectionEventEntry) => entry.event_id === eventId))
+      Boolean(data.publications?.some((entry: ProjectionEventEntry) => entry.event_id === eventId)) ||
+      Boolean(data.events?.some((entry: ProjectionEventEntry) => entry.event_id === eventId))
     );
   }
 
@@ -703,11 +790,6 @@ export class ReadProjectionService {
         this.memoryLocks.delete(lockKey);
       }
     }
-  }
-
-  private async enterTenant(tenantId: string): Promise<void> {
-    await this.prisma.ensureTenant(tenantId);
-    await this.prisma.setTenantContext(tenantId);
   }
 
   private key(tenantId: string, projectionName: ReadProjectionName, entityId: string): string {

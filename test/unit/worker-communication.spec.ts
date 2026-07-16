@@ -1,4 +1,3 @@
-import { InternalApiKeyGuard } from '../../src/worker/internal-api-key.guard';
 import { DomainEventFactory } from '../../src/domain-events/domain-event-factory.service';
 import { DomainInboxService } from '../../src/domain-events/domain-inbox.service';
 import { DomainOutboxPublisherService } from '../../src/domain-events/domain-outbox-publisher.service';
@@ -9,15 +8,13 @@ import { ProductSchema, ProductType } from '../../src/products/product-config.se
 import { EngineEventService } from '../../src/worker/engine-event.service';
 import { WorkerQueueService } from '../../src/worker/worker-queue.service';
 
-describe('fengine worker communication', () => {
+describe('ledger-core worker communication', () => {
   beforeEach(() => {
     process.env.FENGINE_QUEUE_BACKEND = 'memory';
-    process.env.INTERNAL_API_KEY = 'test-internal-key';
   });
 
   afterEach(() => {
     delete process.env.FENGINE_QUEUE_BACKEND;
-    delete process.env.INTERNAL_API_KEY;
   });
 
   it('publishes idempotent BullMQ-compatible engine jobs', async () => {
@@ -30,13 +27,14 @@ describe('fengine worker communication', () => {
     });
 
     expect(first).toMatchObject({
-      id: 'ledger-core-loan-approved-001',
       queue: 'platform',
       type: 'LEDGER_CORE_EVENT',
       status: 'QUEUED',
       payload: { loan_id: 'loan_001', event_type: 'LOAN_APPROVED' },
     });
-    await expect(queue.get(first.id)).resolves.toEqual(first);
+    expect(first.id).toBe(jobId('tenant_001', 'loan-approved-001'));
+    await expect(queue.get('tenant_001', first.id)).resolves.toEqual(first);
+    await expect(queue.get('tenant_002', first.id)).resolves.toBeNull();
   });
 
   it('publishes canonical domain events through the Outbox publisher', async () => {
@@ -83,13 +81,13 @@ describe('fengine worker communication', () => {
     await outbox.append(paymentEvent);
     await outbox.append(productEvent);
     await outbox.append(journalEvent);
-    await expect(publisher.publishPending(1)).resolves.toMatchObject({
+    await expect(publisher.publishPending('tenant_001', 1)).resolves.toMatchObject({
       claimed: 1,
       published: 1,
       failed: 0,
     });
 
-    const queued = await queue.get(`ledger-core-${disbursementEvent.event_id}`);
+    const queued = await queue.get('tenant_001', jobId('tenant_001', disbursementEvent.event_id));
     expect(queued).toMatchObject({
       type: 'LEDGER_CORE_EVENT',
       tenant_id: 'tenant_001',
@@ -102,12 +100,12 @@ describe('fengine worker communication', () => {
       event_id: disbursementEvent.event_id,
       event_type: 'lending.loan_disbursed',
     });
-    await expect(publisher.publishPending(1)).resolves.toMatchObject({
+    await expect(publisher.publishPending('tenant_001', 1)).resolves.toMatchObject({
       claimed: 1,
       published: 1,
       failed: 0,
     });
-    const paymentQueued = await queue.get(`ledger-core-${paymentEvent.event_id}`);
+    const paymentQueued = await queue.get('tenant_001', jobId('tenant_001', paymentEvent.event_id));
     expect(paymentQueued).toMatchObject({
       payload: {
         domain_event: true,
@@ -119,12 +117,12 @@ describe('fengine worker communication', () => {
       allocation: { principal: '1375.00', interest: '625.00', fees: '500.00' },
       balance_after: '23625.00',
     });
-    await expect(publisher.publishPending(1)).resolves.toMatchObject({
+    await expect(publisher.publishPending('tenant_001', 1)).resolves.toMatchObject({
       claimed: 1,
       published: 1,
       failed: 0,
     });
-    const productQueued = await queue.get(`ledger-core-${productEvent.event_id}`);
+    const productQueued = await queue.get('tenant_001', jobId('tenant_001', productEvent.event_id));
     expect(productQueued).toMatchObject({
       payload: {
         domain_event: true,
@@ -136,12 +134,12 @@ describe('fengine worker communication', () => {
       product_type: ProductType.LOAN,
       configuration_version: 2,
     });
-    await expect(publisher.publishPending(1)).resolves.toMatchObject({
+    await expect(publisher.publishPending('tenant_001', 1)).resolves.toMatchObject({
       claimed: 1,
       published: 1,
       failed: 0,
     });
-    const journalQueued = await queue.get(`ledger-core-${journalEvent.event_id}`);
+    const journalQueued = await queue.get('tenant_001', jobId('tenant_001', journalEvent.event_id));
     expect(journalQueued).toMatchObject({
       payload: {
         domain_event: true,
@@ -284,7 +282,7 @@ describe('fengine worker communication', () => {
     });
 
     await outbox.append(event);
-    const [claimed] = await outbox.claimPending(1);
+    const [claimed] = await outbox.claimPending('tenant_001', 1);
     (outbox as any).memory.set(event.event_id, {
       ...claimed,
       locked_by: 'ledger-core-outbox-new-owner',
@@ -320,7 +318,7 @@ describe('fengine worker communication', () => {
     });
 
     const first = await inbox.startProcessing(event, 'workflow-dispatch');
-    (inbox as any).memory.set(`${event.event_id}:workflow-dispatch`, {
+    (inbox as any).memory.set(`${event.tenant_id}:${event.event_id}:workflow-dispatch`, {
       ...first.record,
       status: 'PROCESSING',
       updated_at: new Date(Date.now() - 1000),
@@ -333,22 +331,12 @@ describe('fengine worker communication', () => {
     delete process.env.FENGINE_INBOX_PROCESSING_LEASE_MS;
   });
 
-  it('rejects missing or invalid internal API keys', () => {
-    const guard = new InternalApiKeyGuard();
-    const context = (key?: string) =>
-      ({
-        switchToHttp: () => ({
-          getRequest: () => ({
-            headers: key ? { 'x-internal-api-key': key } : {},
-          }),
-        }),
-      }) as any;
-
-    expect(() => guard.canActivate(context())).toThrow('Internal API key is required');
-    expect(() => guard.canActivate(context('invalid-key'))).toThrow('Invalid internal API key');
-    expect(guard.canActivate(context('test-internal-key'))).toBe(true);
-  });
 });
+
+function jobId(tenantId: string, idempotencyKey: string): string {
+  const digest = createHash('sha256').update(`${tenantId}:${idempotencyKey}`).digest('hex').slice(0, 32);
+  return `ledger-core-${digest}`;
+}
 
 function approvedLoan(): Loan {
   return {
@@ -421,3 +409,4 @@ function journalEntry(): JournalEntry {
     metadata: {},
   };
 }
+import { createHash } from 'crypto';

@@ -168,10 +168,7 @@ export class ProductConfigService {
     productType: ProductType,
     config: Partial<ProductSchema>,
   ): Promise<ProductSchema> {
-    await this.prisma.ensureTenant(tenantId);
-
-    return this.prisma.db.$transaction(async (tx: any) => {
-      await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
+    return this.prisma.withTenant(tenantId, async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}), hashtext(${productId}))`;
 
       const [existingRow] = (await tx.$queryRaw`
@@ -256,7 +253,9 @@ export class ProductConfigService {
       action: 'product.upserted',
       entity_type: 'product',
       entity_id: productId,
-      phase: 'ACT',
+      stage: 'CONFIGURED',
+      result: 'SUCCEEDED',
+      source: 'SYSTEM',
       metadata: { productType, enabled: product.enabled },
     });
   }
@@ -323,7 +322,9 @@ export class ProductConfigService {
       action: 'tenant.config.generated',
       entity_type: 'tenant_config',
       entity_id: tenantId,
-      phase: 'ACT',
+      stage: 'CONFIGURED',
+      result: 'SUCCEEDED',
+      source: 'SYSTEM',
       metadata: { jurisdiction, product_count: products.length },
     });
 

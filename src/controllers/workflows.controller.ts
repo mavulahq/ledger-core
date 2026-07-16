@@ -1,7 +1,11 @@
 import { Body, Controller, Get, NotFoundException, Param, Post, Req } from '@nestjs/common';
 import { SchemaManagerService } from '../schema-manager/schema-manager.service';
+import { RequirePermissions } from '../auth/permissions.decorator';
+import { CreateWorkflowV1Dto, ExecuteWorkflowV1Dto } from '../dto/public.dto';
+import { IdempotentOperation } from '../idempotency/idempotent-operation.decorator';
 
 @Controller('workflows')
+@RequirePermissions('finance.read')
 export class WorkflowsController {
   constructor(private readonly schemas: SchemaManagerService) {}
 
@@ -25,26 +29,34 @@ export class WorkflowsController {
   }
 
   @Post()
-  async create(@Req() req: any, @Body() body: any) {
+  @RequirePermissions('configuration.write')
+  @IdempotentOperation('workflows.create')
+  async create(@Req() req: any, @Body() body: CreateWorkflowV1Dto) {
     return this.schemas.createWorkflow(this.tenant(req), body);
   }
 
   @Post('presets/loan-approval-notification')
+  @RequirePermissions('configuration.write')
+  @IdempotentOperation('workflows.presets.loan-approval-notification')
   async createLoanApprovalNotification(@Req() req: any) {
     return this.schemas.createLoanApprovalNotificationWorkflow(this.tenant(req));
   }
 
   @Post('presets/monthly-fee-charge')
+  @RequirePermissions('configuration.write')
+  @IdempotentOperation('workflows.presets.monthly-fee-charge')
   async createMonthlyFeeCharge(@Req() req: any) {
     return this.schemas.createMonthlyFeeChargeWorkflow(this.tenant(req));
   }
 
   @Post(':workflowId/execute')
-  async execute(@Req() req: any, @Param('workflowId') workflowId: string, @Body() body: any) {
-    return this.schemas.executeWorkflow(this.tenant(req), workflowId, body.context || body);
+  @RequirePermissions('finance.write')
+  @IdempotentOperation('workflows.execute')
+  async execute(@Req() req: any, @Param('workflowId') workflowId: string, @Body() body: ExecuteWorkflowV1Dto) {
+    return this.schemas.executeWorkflow(this.tenant(req), workflowId, body.context);
   }
 
   private tenant(req: any): string {
-    return req.tenantId || 'public';
+    return req.tenantId;
   }
 }
