@@ -2,254 +2,947 @@ openapi: 3.1.0
 info:
   title: MAVULA Ledger Core API
   version: 1.0.0
-  description: Tenant-scoped accounts, financial controls, configuration and projection APIs.
-  license: { name: GNU Affero General Public License v3.0 only, identifier: AGPL-3.0-only }
+  description: |
+    Tenant-scoped accounts, controlled financial adjustments, product configuration, workflows, and read projections.
+    Ledger Core is the financial source of truth and enforces idempotency, tenant isolation, and maker-checker controls.
+  license:
+    name: GNU Affero General Public License v3.0 only
+    identifier: AGPL-3.0-only
 servers:
   - url: https://ledger.mavula.dev
+    description: Ledger Core public endpoint
 security: [{ bearerAuth: [] }]
+tags:
+  - { name: Accounts, description: 'Tenant-scoped accounts, balances, and statements.' }
+  - { name: Account lifecycle, description: 'Freeze, unfreeze, and close requests with maker-checker approval.' }
+  - { name: Financial adjustments, description: Controlled reversal and correction requests. }
+  - { name: Configuration, description: Institutional financial product configuration. }
+  - { name: Rules, description: Product rule definitions and defaults. }
+  - { name: Schemas, description: Institution-defined entity schemas. }
+  - { name: Workflows, description: Configurable workflow definitions and executions. }
+  - { name: Projections, description: Eventually consistent activity and publication read models. }
 paths:
   /api/accounts:
-    get: { operationId: listAccounts, tags: [Accounts], responses: { '200': { description: Accounts } } }
+    get:
+      operationId: listAccounts
+      summary: List accounts
+      description: List accounts visible to the authenticated tenant.
+      tags: [Accounts]
+      x-mavula-permissions: [finance.read]
+      responses:
+        '200': { description: Accounts, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Account' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       operationId: createAccount
+      summary: Create an account
+      description: Create an active tenant-scoped account. An identical Idempotency-Key replay returns the original response.
       tags: [Accounts]
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Account created }, '400': { $ref: '#/components/responses/BadRequest' }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [finance.write]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAccount' }
+            example: { customer_id: customer_001, product_id: savings_standard, name: Primary Savings, currency: MZN }
+      responses:
+        '201': { description: Account created, content: { application/json: { schema: { $ref: '#/components/schemas/Account' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/accounts/{accountId}:
     get:
       operationId: getAccount
+      summary: Read an account
       tags: [Accounts]
+      x-mavula-permissions: [finance.read]
       parameters: [{ $ref: '#/components/parameters/AccountId' }]
-      responses: { '200': { description: Account }, '404': { $ref: '#/components/responses/NotFound' } }
+      responses:
+        '200': { description: Account, content: { application/json: { schema: { $ref: '#/components/schemas/Account' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/accounts/{accountId}/balance:
     get:
       operationId: getAccountBalance
+      summary: Read account balance
+      description: Read the synchronous account balance used for financial decisions.
       tags: [Accounts]
+      x-mavula-permissions: [finance.read]
       parameters: [{ $ref: '#/components/parameters/AccountId' }]
-      responses: { '200': { description: Account balance } }
+      responses:
+        '200': { description: Account balance, content: { application/json: { schema: { $ref: '#/components/schemas/AccountBalance' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/accounts/{accountId}/statement:
     get:
       operationId: getAccountStatement
+      summary: Read account statement
+      description: Read entries ordered by posting time with stable cursor pagination.
       tags: [Accounts]
+      x-mavula-permissions: [finance.read]
       parameters:
         - { $ref: '#/components/parameters/AccountId' }
         - { in: query, name: from, schema: { type: string, format: date-time } }
         - { in: query, name: to, schema: { type: string, format: date-time } }
         - { in: query, name: cursor, schema: { type: string } }
-        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100 } }
-      responses: { '200': { description: Paginated statement } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200': { description: Paginated statement, content: { application/json: { schema: { $ref: '#/components/schemas/AccountStatementPage' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/accounts/{accountId}/status-transitions:
     post:
       operationId: submitAccountStatusTransition
+      summary: Submit an account status transition
+      description: Submit FREEZE, UNFREEZE, or CLOSE for approval by a different operator.
       tags: [Account lifecycle]
-      parameters: [{ $ref: '#/components/parameters/AccountId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Lifecycle request submitted }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [finance.write]
+      parameters: [{ $ref: '#/components/parameters/AccountId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmitAccountTransition' }
+            example: { transition: FREEZE, reason: Suspected unauthorized activity }
+      responses:
+        '201': { description: Lifecycle request submitted, content: { application/json: { schema: { $ref: '#/components/schemas/AccountLifecycleRequest' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/account-lifecycle-requests:
-    get: { operationId: listAccountLifecycleRequests, tags: [Account lifecycle], responses: { '200': { description: Lifecycle requests } } }
+    get:
+      operationId: listAccountLifecycleRequests
+      summary: List account lifecycle requests
+      tags: [Account lifecycle]
+      x-mavula-permissions: [finance.read]
+      parameters:
+        - { in: query, name: account_id, schema: { type: string } }
+        - { in: query, name: status, schema: { $ref: '#/components/schemas/DecisionStatus' } }
+        - { in: query, name: cursor, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200': { description: Lifecycle requests, content: { application/json: { schema: { $ref: '#/components/schemas/AccountLifecyclePage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/account-lifecycle-requests/{requestId}:
     get:
       operationId: getAccountLifecycleRequest
+      summary: Read an account lifecycle request
       tags: [Account lifecycle]
+      x-mavula-permissions: [finance.read]
       parameters: [{ $ref: '#/components/parameters/RequestId' }]
-      responses: { '200': { description: Lifecycle request }, '404': { $ref: '#/components/responses/NotFound' } }
+      responses:
+        '200': { description: Lifecycle request, content: { application/json: { schema: { $ref: '#/components/schemas/AccountLifecycleRequest' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/account-lifecycle-requests/{requestId}/approve:
     post:
       operationId: approveAccountLifecycleRequest
+      summary: Approve an account lifecycle request
+      description: Apply a pending transition. The checker must have finance.approve and cannot be the maker.
       tags: [Account lifecycle]
-      parameters: [{ $ref: '#/components/parameters/RequestId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Lifecycle request approved }, '403': { $ref: '#/components/responses/Forbidden' }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [finance.approve]
+      parameters: [{ $ref: '#/components/parameters/RequestId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody: { $ref: '#/components/requestBodies/OptionalDecision' }
+      responses:
+        '201': { description: Lifecycle request applied, content: { application/json: { schema: { $ref: '#/components/schemas/AccountLifecycleRequest' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/account-lifecycle-requests/{requestId}/reject:
     post:
       operationId: rejectAccountLifecycleRequest
+      summary: Reject an account lifecycle request
       tags: [Account lifecycle]
-      parameters: [{ $ref: '#/components/parameters/RequestId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Lifecycle request rejected }, '403': { $ref: '#/components/responses/Forbidden' }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [finance.approve]
+      parameters: [{ $ref: '#/components/parameters/RequestId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody: { $ref: '#/components/requestBodies/RequiredDecision' }
+      responses:
+        '201': { description: Lifecycle request rejected, content: { application/json: { schema: { $ref: '#/components/schemas/AccountLifecycleRequest' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/financial-adjustment-requests:
-    get: { operationId: listFinancialAdjustmentRequests, tags: [Financial adjustments], responses: { '200': { description: Adjustment requests } } }
+    get:
+      operationId: listFinancialAdjustmentRequests
+      summary: List financial adjustment requests
+      tags: [Financial adjustments]
+      x-mavula-permissions: [finance.read]
+      parameters:
+        - { in: query, name: status, schema: { $ref: '#/components/schemas/DecisionStatus' } }
+        - { in: query, name: adjustment_type, schema: { type: string, enum: [REVERSAL, CORRECTION] } }
+        - { in: query, name: target_type, schema: { type: string, enum: [TRANSACTION, JOURNAL_ENTRY] } }
+        - { in: query, name: target_id, schema: { type: string } }
+        - { in: query, name: cursor, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200': { description: Adjustment requests, content: { application/json: { schema: { $ref: '#/components/schemas/FinancialAdjustmentPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       operationId: submitFinancialAdjustmentRequest
+      summary: Submit a financial adjustment
+      description: Submit a reversal or correction without mutating the immutable original record.
       tags: [Financial adjustments]
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Adjustment request submitted }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [finance.write]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateFinancialAdjustment' }
+            examples:
+              reversal: { value: { target_type: TRANSACTION, target_id: transaction_001, adjustment_type: REVERSAL, reason: Duplicate posting } }
+              correction:
+                value:
+                  target_type: JOURNAL_ENTRY
+                  target_id: journal_001
+                  adjustment_type: CORRECTION
+                  reason: Correct clearing account
+                  correction: { journal: { ledger_lines: [{ account_code: '1100', debit_amount: '100.00' }, { account_code: '2100', credit_amount: '100.00' }] } }
+      responses:
+        '201': { description: Adjustment request submitted, content: { application/json: { schema: { $ref: '#/components/schemas/FinancialAdjustmentRequest' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/financial-adjustment-requests/{requestId}:
     get:
       operationId: getFinancialAdjustmentRequest
+      summary: Read a financial adjustment request
       tags: [Financial adjustments]
+      x-mavula-permissions: [finance.read]
       parameters: [{ $ref: '#/components/parameters/RequestId' }]
-      responses: { '200': { description: Adjustment request }, '404': { $ref: '#/components/responses/NotFound' } }
+      responses:
+        '200': { description: Adjustment request, content: { application/json: { schema: { $ref: '#/components/schemas/FinancialAdjustmentRequest' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/financial-adjustment-requests/{requestId}/approve:
     post:
       operationId: approveFinancialAdjustmentRequest
+      summary: Approve a financial adjustment
+      description: Atomically post the reversal and optional replacement. Self-approval is rejected.
       tags: [Financial adjustments]
-      parameters: [{ $ref: '#/components/parameters/RequestId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Adjustment applied }, '403': { $ref: '#/components/responses/Forbidden' }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [finance.approve]
+      parameters: [{ $ref: '#/components/parameters/RequestId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody: { $ref: '#/components/requestBodies/OptionalDecision' }
+      responses:
+        '201': { description: Adjustment applied, content: { application/json: { schema: { $ref: '#/components/schemas/FinancialAdjustmentRequest' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/financial-adjustment-requests/{requestId}/reject:
     post:
       operationId: rejectFinancialAdjustmentRequest
+      summary: Reject a financial adjustment
       tags: [Financial adjustments]
-      parameters: [{ $ref: '#/components/parameters/RequestId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Adjustment rejected }, '403': { $ref: '#/components/responses/Forbidden' }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [finance.approve]
+      parameters: [{ $ref: '#/components/parameters/RequestId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody: { $ref: '#/components/requestBodies/RequiredDecision' }
+      responses:
+        '201': { description: Adjustment rejected, content: { application/json: { schema: { $ref: '#/components/schemas/FinancialAdjustmentRequest' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/products:
-    get: { operationId: listProducts, tags: [Configuration], responses: { '200': { description: Products } } }
+    get:
+      operationId: listProducts
+      summary: List financial products
+      tags: [Configuration]
+      x-mavula-permissions: [finance.read]
+      responses:
+        '200': { description: Products, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Product' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       operationId: upsertProduct
+      summary: Create or update a product
       tags: [Configuration]
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Product configuration stored }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [configuration.write]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody: { $ref: '#/components/requestBodies/UpsertProduct' }
+      responses:
+        '201': { description: Product configuration stored, content: { application/json: { schema: { $ref: '#/components/schemas/Product' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/products/config:
-    get: { operationId: getProductConfiguration, tags: [Configuration], responses: { '200': { description: Tenant product configuration } } }
+    get:
+      operationId: getProductConfiguration
+      summary: Read tenant product configuration
+      tags: [Configuration]
+      x-mavula-permissions: [finance.read]
+      responses:
+        '200': { description: Tenant product configuration, content: { application/json: { schema: { $ref: '#/components/schemas/TenantProductConfiguration' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/products/config/generate:
     post:
       operationId: generateProductConfiguration
+      summary: Generate jurisdiction defaults
       tags: [Configuration]
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Configuration generated }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [configuration.write]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/GenerateTenantConfiguration' }, example: { jurisdiction: MZ } } }
+      responses:
+        '201': { description: Configuration generated, content: { application/json: { schema: { $ref: '#/components/schemas/TenantProductConfiguration' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/products/{productId}:
     get:
       operationId: getProduct
+      summary: Read a financial product
       tags: [Configuration]
+      x-mavula-permissions: [finance.read]
       parameters: [{ $ref: '#/components/parameters/ProductId' }]
-      responses: { '200': { description: Product }, '404': { $ref: '#/components/responses/NotFound' } }
+      responses:
+        '200': { description: Product, content: { application/json: { schema: { $ref: '#/components/schemas/Product' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/products/{productId}/rules:
     get:
       operationId: listRules
+      summary: List product rules
       tags: [Rules]
+      x-mavula-permissions: [finance.read]
       parameters: [{ $ref: '#/components/parameters/ProductId' }]
-      responses: { '200': { description: Rules } }
+      responses:
+        '200': { description: Rules, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Rule' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       operationId: createRule
+      summary: Create a product rule
       tags: [Rules]
-      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Rule created }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [configuration.write]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody: { $ref: '#/components/requestBodies/CreateRule' }
+      responses:
+        '201': { description: Rule created, content: { application/json: { schema: { $ref: '#/components/schemas/Rule' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/products/{productId}/rules/defaults:
     post:
       operationId: seedDefaultRules
+      summary: Seed default product rules
       tags: [Rules]
-      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
-      responses: { '201': { description: Default rules created }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [configuration.write]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      responses:
+        '201': { description: Default rules created, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Rule' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/products/{productId}/rules/{ruleId}:
     put:
       operationId: updateRule
+      summary: Update a product rule
       tags: [Rules]
-      parameters: [{ $ref: '#/components/parameters/ProductId' }, { in: path, name: ruleId, required: true, schema: { type: string } }, { $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '200': { description: Rule updated }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [configuration.write]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/RuleId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody: { $ref: '#/components/requestBodies/UpdateRule' }
+      responses:
+        '200': { description: Rule updated, content: { application/json: { schema: { $ref: '#/components/schemas/MutationStatus' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
     delete:
       operationId: deleteRule
+      summary: Delete a product rule
       tags: [Rules]
-      parameters: [{ $ref: '#/components/parameters/ProductId' }, { in: path, name: ruleId, required: true, schema: { type: string } }, { $ref: '#/components/parameters/IdempotencyKey' }]
-      responses: { '200': { description: Rule deleted }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [configuration.write]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/RuleId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      responses:
+        '200': { description: Rule deleted, content: { application/json: { schema: { $ref: '#/components/schemas/MutationStatus' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/schemas:
-    get: { operationId: listSchemas, tags: [Schemas], responses: { '200': { description: Schemas } } }
+    get:
+      operationId: listSchemas
+      summary: List entity schemas
+      tags: [Schemas]
+      x-mavula-permissions: [finance.read]
+      responses:
+        '200': { description: Schemas, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/EntitySchema' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       operationId: createSchema
+      summary: Create an entity schema
       tags: [Schemas]
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Schema created }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [configuration.write]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody: { $ref: '#/components/requestBodies/CreateSchema' }
+      responses:
+        '201': { description: Schema created, content: { application/json: { schema: { $ref: '#/components/schemas/EntitySchema' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/schemas/import:
     post:
       operationId: importSchema
+      summary: Import an entity schema
       tags: [Schemas]
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Schema imported }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [configuration.write]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody: { $ref: '#/components/requestBodies/CreateSchema' }
+      responses:
+        '201': { description: Schema imported, content: { application/json: { schema: { $ref: '#/components/schemas/EntitySchema' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/schemas/presets/business-registration:
     post:
       operationId: createBusinessRegistrationSchema
+      summary: Create the business registration preset
       tags: [Schemas]
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
-      responses: { '201': { description: Preset schema created }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [configuration.write]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      responses:
+        '201': { description: Preset schema created, content: { application/json: { schema: { $ref: '#/components/schemas/EntitySchema' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/schemas/{schemaId}:
     get:
       operationId: getSchema
+      summary: Read an entity schema
       tags: [Schemas]
-      parameters: [{ in: path, name: schemaId, required: true, schema: { type: string } }]
-      responses: { '200': { description: Schema }, '404': { $ref: '#/components/responses/NotFound' } }
+      x-mavula-permissions: [finance.read]
+      parameters: [{ $ref: '#/components/parameters/SchemaId' }]
+      responses:
+        '200': { description: Schema, content: { application/json: { schema: { $ref: '#/components/schemas/EntitySchema' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/schemas/{schemaId}/export:
     get:
       operationId: exportSchema
+      summary: Export an entity schema
       tags: [Schemas]
-      parameters: [{ in: path, name: schemaId, required: true, schema: { type: string } }]
-      responses: { '200': { description: Portable schema definition } }
+      x-mavula-permissions: [finance.read]
+      parameters: [{ $ref: '#/components/parameters/SchemaId' }]
+      responses:
+        '200': { description: Portable schema definition, content: { application/json: { schema: { $ref: '#/components/schemas/EntitySchema' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/workflows:
-    get: { operationId: listWorkflows, tags: [Workflows], responses: { '200': { description: Workflows } } }
+    get:
+      operationId: listWorkflows
+      summary: List workflows
+      tags: [Workflows]
+      x-mavula-permissions: [finance.read]
+      responses:
+        '200': { description: Workflows, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Workflow' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       operationId: createWorkflow
+      summary: Create a workflow
       tags: [Workflows]
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Workflow created }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [configuration.write]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody: { $ref: '#/components/requestBodies/CreateWorkflow' }
+      responses:
+        '201': { description: Workflow created, content: { application/json: { schema: { $ref: '#/components/schemas/Workflow' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/workflows/trigger/{trigger}:
     get:
       operationId: listWorkflowsByTrigger
+      summary: List workflows by trigger
       tags: [Workflows]
+      x-mavula-permissions: [finance.read]
       parameters: [{ in: path, name: trigger, required: true, schema: { type: string } }]
-      responses: { '200': { description: Matching workflows } }
+      responses:
+        '200': { description: Matching workflows, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Workflow' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/workflows/presets/loan-approval-notification:
     post:
       operationId: createLoanApprovalNotificationWorkflow
+      summary: Create the loan approval notification preset
       tags: [Workflows]
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
-      responses: { '201': { description: Preset workflow created }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [configuration.write]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      responses:
+        '201': { description: Preset workflow created, content: { application/json: { schema: { $ref: '#/components/schemas/Workflow' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/workflows/presets/monthly-fee-charge:
     post:
       operationId: createMonthlyFeeChargeWorkflow
+      summary: Create the monthly fee charge preset
       tags: [Workflows]
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
-      responses: { '201': { description: Preset workflow created }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [configuration.write]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      responses:
+        '201': { description: Preset workflow created, content: { application/json: { schema: { $ref: '#/components/schemas/Workflow' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/workflows/{workflowId}:
     get:
       operationId: getWorkflow
+      summary: Read a workflow
       tags: [Workflows]
-      parameters: [{ in: path, name: workflowId, required: true, schema: { type: string } }]
-      responses: { '200': { description: Workflow }, '404': { $ref: '#/components/responses/NotFound' } }
+      x-mavula-permissions: [finance.read]
+      parameters: [{ $ref: '#/components/parameters/WorkflowId' }]
+      responses:
+        '200': { description: Workflow, content: { application/json: { schema: { $ref: '#/components/schemas/Workflow' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/workflows/{workflowId}/execute:
     post:
       operationId: executeWorkflow
+      summary: Execute a workflow
       tags: [Workflows]
-      parameters: [{ in: path, name: workflowId, required: true, schema: { type: string } }, { $ref: '#/components/parameters/IdempotencyKey' }]
-      requestBody: { $ref: '#/components/requestBodies/JsonObject' }
-      responses: { '201': { description: Workflow execution completed }, '409': { $ref: '#/components/responses/Conflict' } }
+      x-mavula-permissions: [finance.write]
+      parameters: [{ $ref: '#/components/parameters/WorkflowId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/CorrelationId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ExecuteWorkflow' }, example: { context: { account_id: account_001, event: MONTH_END } } } }
+      responses:
+        '201': { description: Workflow execution completed, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/projections/status:
-    get: { operationId: getProjectionStatus, tags: [Projections], responses: { '200': { description: Projection checkpoints } } }
+    get:
+      operationId: getProjectionStatus
+      summary: Read projection checkpoints
+      description: Read freshness and last-event checkpoints. Projections are eventually consistent and not command-side truth.
+      tags: [Projections]
+      x-mavula-permissions: [finance.read]
+      responses:
+        '200': { description: Projection checkpoints, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ProjectionStatus' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/projections/loan-activity:
-    get: { operationId: listLoanActivity, tags: [Projections], responses: { '200': { description: Loan activity projections } } }
+    get: { operationId: listLoanActivity, summary: List loan activity projections, tags: [Projections], x-mavula-permissions: [finance.read], responses: { '200': { description: Loan activity projections, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Projection' } } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } } }
   /api/projections/loan-activity/{loanId}:
-    get: { operationId: getLoanActivity, tags: [Projections], parameters: [{ in: path, name: loanId, required: true, schema: { type: string } }], responses: { '200': { description: Loan activity projection } } }
+    get: { operationId: getLoanActivity, summary: Read a loan activity projection, tags: [Projections], x-mavula-permissions: [finance.read], parameters: [{ in: path, name: loanId, required: true, schema: { type: string } }], responses: { '200': { description: Loan activity projection, content: { application/json: { schema: { $ref: '#/components/schemas/Projection' } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } } }
   /api/projections/ledger-activity:
-    get: { operationId: listLedgerActivity, tags: [Projections], responses: { '200': { description: Ledger activity projections } } }
+    get: { operationId: listLedgerActivity, summary: List ledger activity projections, tags: [Projections], x-mavula-permissions: [finance.read], responses: { '200': { description: Ledger activity projections, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Projection' } } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } } }
   /api/projections/ledger-activity/{journalEntryId}:
-    get: { operationId: getLedgerActivity, tags: [Projections], parameters: [{ in: path, name: journalEntryId, required: true, schema: { type: string } }], responses: { '200': { description: Ledger activity projection } } }
+    get: { operationId: getLedgerActivity, summary: Read a ledger activity projection, tags: [Projections], x-mavula-permissions: [finance.read], parameters: [{ in: path, name: journalEntryId, required: true, schema: { type: string } }], responses: { '200': { description: Ledger activity projection, content: { application/json: { schema: { $ref: '#/components/schemas/Projection' } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } } }
   /api/projections/product-publications:
-    get: { operationId: listProductPublications, tags: [Projections], responses: { '200': { description: Product publication projections } } }
+    get: { operationId: listProductPublications, summary: List product publication projections, tags: [Projections], x-mavula-permissions: [finance.read], responses: { '200': { description: Product publication projections, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Projection' } } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } } }
   /api/projections/product-publications/{productId}:
-    get: { operationId: getProductPublication, tags: [Projections], parameters: [{ $ref: '#/components/parameters/ProductId' }], responses: { '200': { description: Product publication projection } } }
+    get: { operationId: getProductPublication, summary: Read a product publication projection, tags: [Projections], x-mavula-permissions: [finance.read], parameters: [{ $ref: '#/components/parameters/ProductId' }], responses: { '200': { description: Product publication projection, content: { application/json: { schema: { $ref: '#/components/schemas/Projection' } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } } }
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
   parameters:
-    IdempotencyKey: { in: header, name: Idempotency-Key, required: true, schema: { type: string, minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' } }
+    IdempotencyKey: { in: header, name: Idempotency-Key, required: true, description: Reuse only with the same operation and payload., schema: { type: string, minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' } }
+    CorrelationId: { in: header, name: X-Correlation-ID, required: false, description: Recommended trace identifier. The server generates one when omitted., schema: { type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' } }
     AccountId: { in: path, name: accountId, required: true, schema: { type: string } }
     ProductId: { in: path, name: productId, required: true, schema: { type: string } }
     RequestId: { in: path, name: requestId, required: true, schema: { type: string } }
+    RuleId: { in: path, name: ruleId, required: true, schema: { type: string } }
+    SchemaId: { in: path, name: schemaId, required: true, schema: { type: string } }
+    WorkflowId: { in: path, name: workflowId, required: true, schema: { type: string } }
   requestBodies:
-    JsonObject:
+    OptionalDecision:
       required: true
-      content: { application/json: { schema: { type: object, additionalProperties: true } } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/OptionalDecision' }, example: { reason: Reviewed against supporting evidence } } }
+    RequiredDecision:
+      required: true
+      content: { application/json: { schema: { $ref: '#/components/schemas/RequiredDecision' }, example: { reason: Supporting evidence is insufficient } } }
+    UpsertProduct:
+      required: true
+      content: { application/json: { schema: { $ref: '#/components/schemas/UpsertProduct' }, example: { type: SAVINGS, config: { currency: MZN, minimum_balance: '0.00' } } } }
+    CreateRule:
+      required: true
+      content: { application/json: { schema: { $ref: '#/components/schemas/CreateRule' }, example: { rule_type: ELIGIBILITY, condition: 'customer.age >= 18', action: { allow: true }, priority: 10, enabled: true } } }
+    UpdateRule:
+      required: true
+      content: { application/json: { schema: { $ref: '#/components/schemas/UpdateRule' } } }
+    CreateSchema:
+      required: true
+      content: { application/json: { schema: { $ref: '#/components/schemas/CreateSchema' } } }
+    CreateWorkflow:
+      required: true
+      content: { application/json: { schema: { $ref: '#/components/schemas/CreateWorkflow' } } }
+  schemas:
+    HttpError:
+      type: object
+      required: [statusCode, message]
+      properties:
+        statusCode: { type: integer }
+        message:
+          oneOf:
+            - { type: string }
+            - { type: array, items: { type: string } }
+        error: { type: string }
+    CreateAccount:
+      type: object
+      additionalProperties: false
+      required: [customer_id, product_id, name, currency]
+      properties:
+        customer_id: { type: string, minLength: 1, maxLength: 128 }
+        product_id: { type: string, minLength: 1, maxLength: 128 }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+    Account:
+      type: object
+      required: [id, name, currency, status, balance, version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        customer_id: { type: string }
+        product_id: { type: string }
+        name: { type: string }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        status: { type: string, enum: [ACTIVE, FROZEN, CLOSED] }
+        balance: { type: string, pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]{2})$' }
+        version: { type: integer, minimum: 1 }
+        frozen_at: { type: string, format: date-time }
+        closed_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    AccountBalance:
+      type: object
+      required: [account_id, balance, currency]
+      properties:
+        account_id: { type: string }
+        balance: { type: string }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        version: { type: integer }
+    AccountEntry:
+      type: object
+      required: [id, account_id, posting_key, entry_type, direction, amount, currency, balance_after, posted_at]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        journal_entry_id: { type: string }
+        transaction_id: { type: string }
+        posting_key: { type: string }
+        entry_type: { type: string, enum: [OPENING_BALANCE, POSTING, REVERSAL, CORRECTION] }
+        direction: { type: string, enum: [DEBIT, CREDIT] }
+        amount: { type: string }
+        currency: { type: string }
+        balance_after: { type: string }
+        reference: { type: string }
+        posted_at: { type: string, format: date-time }
+    AccountStatementPage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AccountEntry' } }
+        next_cursor: { type: string }
+    SubmitAccountTransition:
+      type: object
+      additionalProperties: false
+      required: [transition, reason]
+      properties:
+        transition: { type: string, enum: [FREEZE, UNFREEZE, CLOSE] }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    DecisionStatus: { type: string, enum: [PENDING_APPROVAL, APPLIED, REJECTED, FAILED] }
+    OptionalDecision:
+      type: object
+      additionalProperties: false
+      properties: { reason: { type: string, maxLength: 500 } }
+    RequiredDecision:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties: { reason: { type: string, minLength: 1, maxLength: 500 } }
+    AccountLifecycleRequest:
+      type: object
+      required: [id, account_id, transition, from_status, target_status, status, reason, requested_by, correlation_id, created_at]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        transition: { type: string, enum: [FREEZE, UNFREEZE, CLOSE] }
+        from_status: { type: string, enum: [ACTIVE, FROZEN, CLOSED] }
+        target_status: { type: string, enum: [ACTIVE, FROZEN, CLOSED] }
+        status: { $ref: '#/components/schemas/DecisionStatus' }
+        reason: { type: string }
+        requested_by: { type: string }
+        decided_by: { type: string }
+        decision_reason: { type: string }
+        failure_reason: { type: string }
+        correlation_id: { type: string }
+        created_at: { type: string, format: date-time }
+        decided_at: { type: string, format: date-time }
+        applied_at: { type: string, format: date-time }
+    AccountLifecyclePage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AccountLifecycleRequest' } }
+        next_cursor: { type: string }
+    LedgerLine:
+      type: object
+      additionalProperties: false
+      required: [account_code]
+      properties:
+        account_code: { type: string, minLength: 1, maxLength: 64 }
+        debit_amount: { type: string }
+        credit_amount: { type: string }
+    AccountPosting:
+      type: object
+      additionalProperties: false
+      required: [account_id, direction, amount, currency]
+      properties:
+        account_id: { type: string }
+        direction: { type: string, enum: [DEBIT, CREDIT] }
+        amount: { type: string }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        reference: { type: string, maxLength: 160 }
+    FinancialCorrection:
+      type: object
+      additionalProperties: false
+      properties:
+        lending:
+          type: object
+          required: [amount, currency]
+          properties:
+            amount: { type: string }
+            currency: { type: string, pattern: '^[A-Z]{3}$' }
+            allocation:
+              type: object
+              required: [principal, interest, fees]
+              properties: { principal: { type: string }, interest: { type: string }, fees: { type: string } }
+        journal:
+          type: object
+          required: [ledger_lines]
+          properties:
+            ledger_lines: { type: array, minItems: 2, items: { $ref: '#/components/schemas/LedgerLine' } }
+            account_postings: { type: array, items: { $ref: '#/components/schemas/AccountPosting' } }
+    CreateFinancialAdjustment:
+      type: object
+      additionalProperties: false
+      required: [target_type, target_id, adjustment_type, reason]
+      properties:
+        target_type: { type: string, enum: [TRANSACTION, JOURNAL_ENTRY] }
+        target_id: { type: string, minLength: 1, maxLength: 128 }
+        adjustment_type: { type: string, enum: [REVERSAL, CORRECTION] }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+        correction: { $ref: '#/components/schemas/FinancialCorrection' }
+    FinancialAdjustmentRequest:
+      allOf:
+        - $ref: '#/components/schemas/CreateFinancialAdjustment'
+        - type: object
+          required: [id, status, requested_by, correlation_id, created_at]
+          properties:
+            id: { type: string }
+            status: { $ref: '#/components/schemas/DecisionStatus' }
+            target_transaction_id: { type: string }
+            target_journal_entry_id: { type: string }
+            target_loan_id: { type: string }
+            requested_by: { type: string }
+            decided_by: { type: string }
+            decision_reason: { type: string }
+            failure_reason: { type: string }
+            correlation_id: { type: string }
+            reversal_transaction_id: { type: string }
+            reversal_journal_entry_id: { type: string }
+            replacement_transaction_id: { type: string }
+            replacement_journal_entry_id: { type: string }
+            created_at: { type: string, format: date-time }
+            decided_at: { type: string, format: date-time }
+            applied_at: { type: string, format: date-time }
+    FinancialAdjustmentPage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/FinancialAdjustmentRequest' } }
+        next_cursor: { type: string }
+    UpsertProduct:
+      type: object
+      additionalProperties: false
+      required: [type, config]
+      properties:
+        type: { type: string }
+        config: { type: object, additionalProperties: true }
+    Product:
+      type: object
+      required: [id, type, config]
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        type: { type: string }
+        config: { type: object, additionalProperties: true }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      additionalProperties: true
+    GenerateTenantConfiguration:
+      type: object
+      additionalProperties: false
+      required: [jurisdiction]
+      properties: { jurisdiction: { type: string, pattern: '^[A-Z][A-Z0-9_-]{1,15}$' } }
+    TenantProductConfiguration:
+      type: object
+      properties:
+        jurisdiction: { type: string }
+        products: { type: array, items: { $ref: '#/components/schemas/Product' } }
+      additionalProperties: true
+    CreateRule:
+      type: object
+      additionalProperties: false
+      required: [rule_type, condition, action]
+      properties:
+        id: { type: string, maxLength: 128 }
+        rule_type: { type: string }
+        condition: { type: string, maxLength: 2000 }
+        action: { type: object, additionalProperties: true }
+        priority: { type: integer }
+        enabled: { type: boolean }
+        applies_to: { type: array, items: { type: string } }
+    UpdateRule:
+      type: object
+      additionalProperties: false
+      properties:
+        condition: { type: string, maxLength: 2000 }
+        action: { type: object, additionalProperties: true }
+        priority: { type: integer }
+        enabled: { type: boolean }
+        applies_to: { type: array, items: { type: string } }
+    Rule:
+      allOf:
+        - $ref: '#/components/schemas/CreateRule'
+        - type: object
+          required: [id, tenant_id, product_id, created_at, updated_at]
+          properties:
+            id: { type: string }
+            tenant_id: { type: string }
+            product_id: { type: string }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+    MutationStatus:
+      type: object
+      required: [status, rule_id]
+      properties: { status: { const: ok }, rule_id: { type: string } }
+    FieldDefinition:
+      type: object
+      additionalProperties: false
+      required: [name, type, required]
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [STRING, NUMBER, DATE, BOOLEAN, ENUM, REFERENCE] }
+        required: { type: boolean }
+        maxLength: { type: integer, minimum: 1 }
+        pattern: { type: string }
+        enum_values: { type: array, items: { type: string } }
+        reference_table: { type: string }
+        default: {}
+        description: { type: string }
+    CreateSchema:
+      type: object
+      additionalProperties: false
+      required: [entity_name, display_name, fields]
+      properties:
+        entity_name: { type: string, pattern: '^[a-z][a-z0-9_]{1,63}$' }
+        display_name: { type: string, maxLength: 160 }
+        fields: { type: array, items: { $ref: '#/components/schemas/FieldDefinition' } }
+    EntitySchema:
+      allOf:
+        - $ref: '#/components/schemas/CreateSchema'
+        - type: object
+          properties:
+            id: { type: string }
+            tenant_id: { type: string }
+            version: { type: integer }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+    WorkflowStep:
+      type: object
+      additionalProperties: false
+      required: [order, name, action, parameters]
+      properties:
+        order: { type: integer, minimum: 1 }
+        name: { type: string }
+        action: { type: string }
+        parameters: { type: object, additionalProperties: true }
+        condition: { type: string }
+    CreateWorkflow:
+      type: object
+      additionalProperties: false
+      required: [name, trigger, steps]
+      properties:
+        name: { type: string, maxLength: 160 }
+        trigger: { type: string, pattern: '^[A-Z][A-Z0-9_]{2,100}$' }
+        steps: { type: array, items: { $ref: '#/components/schemas/WorkflowStep' } }
+    Workflow:
+      allOf:
+        - $ref: '#/components/schemas/CreateWorkflow'
+        - type: object
+          properties:
+            id: { type: string }
+            tenant_id: { type: string }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+    ExecuteWorkflow:
+      type: object
+      additionalProperties: false
+      required: [context]
+      properties: { context: { type: object, additionalProperties: true } }
+    Projection:
+      type: object
+      required: [projection_name, entity_id, payload]
+      properties:
+        projection_name: { type: string, enum: [loan_activity, ledger_activity, product_publication] }
+        entity_id: { type: string }
+        payload: { type: object, additionalProperties: true }
+        last_event_id: { type: string }
+        last_event_type: { type: string }
+        last_event_version: { type: integer }
+        updated_at: { type: string, format: date-time }
+      additionalProperties: true
+    ProjectionStatus:
+      type: object
+      required: [projection_name]
+      properties:
+        projection_name: { type: string }
+        last_event_id: { type: string }
+        last_occurred_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        lag_seconds: { type: number, minimum: 0 }
+      additionalProperties: true
   responses:
-    BadRequest: { description: Request contract or Idempotency-Key is invalid }
-    Unauthorized: { description: Bearer token is missing or invalid }
-    Forbidden: { description: 'Permission, maker-checker or tenant policy denied the operation' }
-    NotFound: { description: Tenant-scoped resource was not found }
-    Conflict: { description: State conflict or Idempotency-Key reuse conflict }
+    BadRequest: { description: Request contract or Idempotency-Key is invalid, content: { application/json: { schema: { $ref: '#/components/schemas/HttpError' } } } }
+    Unauthorized: { description: 'Bearer token is missing, expired, invalid, or issued for another audience', content: { application/json: { schema: { $ref: '#/components/schemas/HttpError' } } } }
+    Forbidden: { description: 'Permission, maker-checker, institution, or tenant policy denied the operation', content: { application/json: { schema: { $ref: '#/components/schemas/HttpError' } } } }
+    NotFound: { description: Tenant-scoped resource was not found, content: { application/json: { schema: { $ref: '#/components/schemas/HttpError' } } } }
+    Conflict: { description: State conflict or Idempotency-Key reuse with a different payload, content: { application/json: { schema: { $ref: '#/components/schemas/HttpError' } } } }
