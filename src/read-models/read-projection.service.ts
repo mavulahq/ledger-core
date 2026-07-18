@@ -596,7 +596,7 @@ export class ReadProjectionService {
     const [inserted] = await tx.$queryRaw<any[]>`
       INSERT INTO "domain_inbox_events" ("id", "eventId", "consumerName", "tenantId", "status", "updatedAt")
       VALUES (${randomUUID()}, ${event.event_id}, ${CONSUMER_NAME}, ${event.tenant_id}, 'PROCESSING', now())
-      ON CONFLICT ("eventId", "consumerName") DO NOTHING
+      ON CONFLICT ("tenantId", "eventId", "consumerName") DO NOTHING
       RETURNING *
     `;
     if (inserted) {
@@ -609,6 +609,7 @@ export class ReadProjectionService {
       SET "status" = 'PROCESSING', "lastError" = NULL, "updatedAt" = now()
       WHERE "eventId" = ${event.event_id}
         AND "consumerName" = ${CONSUMER_NAME}
+        AND "tenantId" = ${event.tenant_id}
         AND (
           "status" = 'FAILED'
           OR ("status" = 'PROCESSING' AND "updatedAt" <= ${staleBefore})

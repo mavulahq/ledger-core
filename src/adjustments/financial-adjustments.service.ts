@@ -25,6 +25,7 @@ import { AccountsService } from '../services/accounts.service';
 import { AuditTrailService } from '../services/audit-trail.service';
 import { FengineStoreService } from '../services/fengine-store.service';
 import { PrismaService } from '../services/prisma.service';
+import { CommittedBusinessConflictException } from '../idempotency/committed-business-conflict.exception';
 import {
   CreateFinancialAdjustmentInput,
   FinancialAdjustmentCorrection,
@@ -79,7 +80,7 @@ export class FinancialAdjustmentsService {
       await this.validateMemoryReferences(tenantId, input, target);
       const requests = this.memory.get(tenantId) || new Map<string, FinancialAdjustmentRecord>();
       if ([...requests.values()].some((request) =>
-        request.targetType === input.targetType && request.targetId === input.targetId
+        request.targetJournalEntryId === target.journal.entry_id
         && ['PENDING_APPROVAL', 'APPLIED'].includes(request.status))) {
         throw new ConflictException('Financial target already has an active adjustment');
       }
@@ -98,8 +99,7 @@ export class FinancialAdjustmentsService {
         const [active] = await tx.$queryRaw<any[]>`
           SELECT id FROM "financial_adjustment_requests"
           WHERE "tenantId" = ${tenantId}
-            AND "targetType" = ${input.targetType}
-            AND "targetId" = ${input.targetId}
+            AND "targetJournalEntryId" = ${target.journal.entry_id}
             AND status IN ('PENDING_APPROVAL', 'APPLIED')
           LIMIT 1
         `;
@@ -131,7 +131,7 @@ export class FinancialAdjustmentsService {
         return persisted;
       });
     } catch (error) {
-      if ((error as any)?.code === '23505') {
+      if (this.isUniqueViolation(error)) {
         throw new ConflictException('Financial target already has a pending adjustment');
       }
       throw error;
@@ -274,7 +274,7 @@ export class FinancialAdjustmentsService {
         );
         return { request: applied };
       });
-      if (result.conflict) throw new ConflictException(result.conflict);
+      if (result.conflict) throw new CommittedBusinessConflictException(result.conflict);
       return result.request;
     } catch (error) {
       if (error instanceof ForbiddenException || error instanceof NotFoundException || error instanceof ConflictException) {
@@ -495,7 +495,11 @@ export class FinancialAdjustmentsService {
         entryType: 'REVERSAL',
       })),
       status: 'DRAFT',
-      metadata: { adjustment_request_id: request.id, adjustment_type: 'REVERSAL' },
+      metadata: {
+        ...target.journal.metadata,
+        adjustment_request_id: request.id,
+        adjustment_type: 'REVERSAL',
+      },
       adjustment_request_id: request.id,
       reversal_of_entry_id: target.journal.entry_id,
     };
@@ -529,7 +533,11 @@ export class FinancialAdjustmentsService {
       entries: lines,
       account_postings: postings,
       status: 'DRAFT',
-      metadata: { adjustment_request_id: request.id, adjustment_type: 'CORRECTION' },
+      metadata: {
+        ...target.journal.metadata,
+        adjustment_request_id: request.id,
+        adjustment_type: 'CORRECTION',
+      },
       adjustment_request_id: request.id,
       correction_of_entry_id: target.journal.entry_id,
     };
@@ -548,9 +556,9 @@ export class FinancialAdjustmentsService {
     }
     const allocation = correction.allocation;
     const credits = [
-      { account_code: '11100', credit_amount: this.decimal(allocation.principal).toNumber() },
-      { account_code: '40010', credit_amount: this.decimal(allocation.interest).toNumber() },
-      { account_code: '40100', credit_amount: this.decimal(allocation.fees).toNumber() },
+      { account_code: '11100', credit_amount: this.nonNegativeDecimal(allocation.principal).toNumber() },
+      { account_code: '40010', credit_amount: this.nonNegativeDecimal(allocation.interest).toNumber() },
+      { account_code: '40100', credit_amount: this.nonNegativeDecimal(allocation.fees).toNumber() },
     ].filter((line) => (line.credit_amount || 0) > 0);
     return [{ account_code: '10010', debit_amount: amount.toNumber() }, ...credits];
   }
@@ -596,6 +604,7 @@ export class FinancialAdjustmentsService {
       reversal_of_transaction_id: original.id,
       correction_of_transaction_id: undefined,
       metadata: {
+        ...original.metadata,
         adjustment_request_id: request.id,
         adjustment_type: 'REVERSAL',
         original_transaction_id: original.id,
@@ -622,9 +631,9 @@ export class FinancialAdjustmentsService {
       amount,
       status: TransactionStatus.POSTED,
       idempotency_key: undefined,
-      principal_payment: allocation ? this.decimal(allocation.principal).toNumber() : original.principal_payment,
-      interest_payment: allocation ? this.decimal(allocation.interest).toNumber() : original.interest_payment,
-      fee_payment: allocation ? this.decimal(allocation.fees).toNumber() : original.fee_payment,
+      principal_payment: allocation ? this.nonNegativeDecimal(allocation.principal).toNumber() : original.principal_payment,
+      interest_payment: allocation ? this.nonNegativeDecimal(allocation.interest).toNumber() : original.interest_payment,
+      fee_payment: allocation ? this.nonNegativeDecimal(allocation.fees).toNumber() : original.fee_payment,
       created_at: now,
       posted_at: now,
       reversed_at: undefined,
@@ -633,6 +642,7 @@ export class FinancialAdjustmentsService {
       reversal_of_transaction_id: undefined,
       correction_of_transaction_id: original.id,
       metadata: {
+        ...original.metadata,
         adjustment_request_id: request.id,
         adjustment_type: 'CORRECTION',
         original_transaction_id: original.id,
@@ -641,9 +651,9 @@ export class FinancialAdjustmentsService {
           status: TransactionStatus.POSTED,
           posting_status: 'SUCCESS',
           allocation: {
-            principal_payment: this.decimal(allocation.principal).toNumber(),
-            interest_payment: this.decimal(allocation.interest).toNumber(),
-            fee_payment: this.decimal(allocation.fees).toNumber(),
+            principal_payment: this.nonNegativeDecimal(allocation.principal).toNumber(),
+            interest_payment: this.nonNegativeDecimal(allocation.interest).toNumber(),
+            fee_payment: this.nonNegativeDecimal(allocation.fees).toNumber(),
           },
           timestamp: now,
         } : undefined,
@@ -770,9 +780,9 @@ export class FinancialAdjustmentsService {
       amount: this.decimal(amount).toFixed(2),
       currency,
       allocation: correction?.allocation ? {
-        principal: this.decimal(correction.allocation.principal).toFixed(2),
-        interest: this.decimal(correction.allocation.interest).toFixed(2),
-        fees: this.decimal(correction.allocation.fees).toFixed(2),
+        principal: this.nonNegativeDecimal(correction.allocation.principal).toFixed(2),
+        interest: this.nonNegativeDecimal(correction.allocation.interest).toFixed(2),
+        fees: this.nonNegativeDecimal(correction.allocation.fees).toFixed(2),
       } : original ? {
         principal: new Decimal(original.principal).toFixed(2),
         interest: new Decimal(original.interest).toFixed(2),
@@ -798,6 +808,7 @@ export class FinancialAdjustmentsService {
     } else {
       journal = await this.store.getJournalEntry(tenantId, targetId);
       if (!journal) throw new NotFoundException(`Journal entry not found: ${targetId}`);
+      transaction = await this.store.getTransaction(tenantId, journal.transaction_id);
     }
     const loan = transaction?.loan_id ? await this.store.getLoan(tenantId, transaction.loan_id) : undefined;
     return {
@@ -837,6 +848,11 @@ export class FinancialAdjustmentsService {
         FOR UPDATE
       `;
       if (!journalRow) throw new NotFoundException(`Journal entry not found: ${targetId}`);
+      [transactionRow] = await tx.$queryRaw<any[]>`
+        SELECT * FROM "financial_transactions"
+        WHERE "tenantId" = ${tenantId} AND id = ${journalRow.transactionId}
+        FOR UPDATE
+      `;
     }
     const transaction = transactionRow ? this.transactionFromRow(transactionRow) : undefined;
     let loan: Loan | undefined;
@@ -901,9 +917,9 @@ export class FinancialAdjustmentsService {
       if (correction.currency !== transaction.currency) throw new BadRequestException('Correction currency must match the original transaction');
       if (transaction.transaction_type === TransactionType.LOAN_PAYMENT) {
         if (!correction.allocation) throw new BadRequestException('Loan payment correction requires allocation');
-        const allocationTotal = this.decimal(correction.allocation.principal)
-          .plus(this.decimal(correction.allocation.interest))
-          .plus(this.decimal(correction.allocation.fees));
+        const allocationTotal = this.nonNegativeDecimal(correction.allocation.principal)
+          .plus(this.nonNegativeDecimal(correction.allocation.interest))
+          .plus(this.nonNegativeDecimal(correction.allocation.fees));
         if (!allocationTotal.equals(amount)) throw new BadRequestException('Loan payment allocation must equal corrected amount');
       } else if (transaction.transaction_type === TransactionType.LOAN_DISBURSEMENT) {
         if (correction.allocation) throw new BadRequestException('Loan disbursement correction must not include allocation');
@@ -919,6 +935,9 @@ export class FinancialAdjustmentsService {
       throw new BadRequestException('Journal correction details are required');
     }
     this.assertBalanced(correction.ledgerLines);
+    if (target.accountEntries.length > 0 && (!correction.accountPostings || correction.accountPostings.length === 0)) {
+      throw new BadRequestException('Correction must replace the original controlled-account postings');
+    }
     for (const posting of correction.accountPostings || []) {
       this.decimal(posting.amount);
     }
@@ -937,7 +956,10 @@ export class FinancialAdjustmentsService {
       const [later] = await tx.$queryRaw<any[]>`
         SELECT id FROM "financial_transactions"
         WHERE "tenantId" = ${tenantId} AND "loanId" = ${target.transaction.loan_id}
-          AND "postedAt" > ${target.transaction.posted_at || target.transaction.created_at}
+          AND ("postedAt", id) > (
+            ${target.transaction.posted_at || target.transaction.created_at},
+            ${target.transaction.id}
+          )
           AND "adjustmentRequestId" IS NULL
         LIMIT 1
       `;
@@ -961,7 +983,11 @@ export class FinancialAdjustmentsService {
       const later = (await this.store.listTransactions(tenantId)).some((transaction) =>
         transaction.loan_id === target.transaction!.loan_id
         && !transaction.adjustment_request_id
-        && (transaction.posted_at || transaction.created_at) > targetAt);
+        && (
+          (transaction.posted_at || transaction.created_at) > targetAt
+          || ((transaction.posted_at || transaction.created_at).valueOf() === targetAt.valueOf()
+            && transaction.id > target.transaction!.id)
+        ));
       if (later) return 'Loan has later financial effects; adjust the latest transaction first';
     }
     const accountConflict = await this.memoryAccountConflict(tenantId, request, target);
@@ -1214,7 +1240,14 @@ export class FinancialAdjustmentsService {
     for (const line of lines) {
       const debit = new Decimal(line.debit_amount || 0);
       const credit = new Decimal(line.credit_amount || 0);
-      if ((!debit.isZero() && !credit.isZero()) || (debit.isZero() && credit.isZero()) || debit.isNegative() || credit.isNegative()) {
+      if (
+        (!debit.isZero() && !credit.isZero())
+        || (debit.isZero() && credit.isZero())
+        || debit.isNegative()
+        || credit.isNegative()
+        || debit.decimalPlaces() > 2
+        || credit.decimalPlaces() > 2
+      ) {
         throw new BadRequestException('Each ledger line must contain exactly one positive debit or credit');
       }
       debits = debits.plus(debit);
@@ -1231,8 +1264,24 @@ export class FinancialAdjustmentsService {
     return decimal;
   }
 
+  private nonNegativeDecimal(value: string | number): Decimal {
+    const decimal = new Decimal(value);
+    if (!decimal.isFinite() || decimal.isNegative() || decimal.decimalPlaces() > 2) {
+      throw new BadRequestException('Financial amount must be a non-negative decimal with at most two places');
+    }
+    return decimal;
+  }
+
   private nonNegative(value: number): number {
     return Math.max(0, Number(new Decimal(value).toFixed(2)));
+  }
+
+  private isUniqueViolation(error: unknown): boolean {
+    const candidate = error as any;
+    return candidate?.code === 'P2002'
+      || candidate?.code === '23505'
+      || candidate?.meta?.code === '23505'
+      || candidate?.cause?.code === '23505';
   }
 
   private transactionFromRow(row: any): Transaction {
