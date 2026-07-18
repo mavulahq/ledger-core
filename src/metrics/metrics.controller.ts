@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { Controller, Get, Res } from '@nestjs/common';
+import { Controller, Get, Res, UseGuards } from '@nestjs/common';
 import { MetricsService } from './metrics.service';
 import { Public } from '../auth/public.decorator';
-import { RequirePermissions } from '../auth/permissions.decorator';
+import { MetricsTokenGuard } from '../auth/metrics-token.guard';
 
 @Controller()
 export class MetricsController {
@@ -15,7 +15,7 @@ export class MetricsController {
 
   @Get('metrics')
   @Public()
-  @RequirePermissions('observability.read')
+  @UseGuards(MetricsTokenGuard)
   async metrics(@Res() res: any) {
     const body = await this.metricsService.metrics();
     res.set('Content-Type', 'text/plain; version=0.0.4');

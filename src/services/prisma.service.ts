@@ -75,11 +75,16 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     const transaction = this.client.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
       return this.transactionContext.run({ tenantId, tx, pending: new Set() }, async () => {
-        const result = await operation(tx);
-        const context = this.transactionContext.getStore();
-        if (context && context.pending.size > 0) {
-          await Promise.all(context.pending);
+        let result: T;
+        try {
+          result = await operation(tx);
+        } catch (error) {
+          const context = this.transactionContext.getStore();
+          if (context && context.pending.size > 0) await Promise.allSettled(context.pending);
+          throw error;
         }
+        const context = this.transactionContext.getStore();
+        if (context && context.pending.size > 0) await Promise.all(context.pending);
         return result;
       });
     });

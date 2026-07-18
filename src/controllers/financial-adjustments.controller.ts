@@ -125,7 +125,7 @@ export class FinancialAdjustmentsController {
       adjustment_type: request.adjustmentType,
       status: request.status,
       reason: request.reason,
-      correction: request.correction,
+      correction: this.publicCorrection(request),
       target_transaction_id: request.targetTransactionId,
       target_journal_entry_id: request.targetJournalEntryId,
       target_loan_id: request.targetLoanId,
@@ -141,6 +141,32 @@ export class FinancialAdjustmentsController {
       created_at: request.createdAt.toISOString(),
       decided_at: request.decidedAt?.toISOString(),
       applied_at: request.appliedAt?.toISOString(),
+    };
+  }
+
+  private publicCorrection(request: FinancialAdjustmentRecord) {
+    const correction = request.correction;
+    if (!correction) return undefined;
+    return {
+      lending: correction.lending ? {
+        amount: correction.lending.amount,
+        currency: correction.lending.currency,
+        allocation: correction.lending.allocation,
+      } : undefined,
+      journal: correction.journal ? {
+        ledger_lines: correction.journal.ledgerLines.map((line) => ({
+          account_code: line.account_code,
+          debit_amount: line.debit_amount,
+          credit_amount: line.credit_amount,
+        })),
+        account_postings: correction.journal.accountPostings?.map((posting) => ({
+          account_id: posting.accountId,
+          direction: posting.direction,
+          amount: posting.amount,
+          currency: posting.currency,
+          reference: posting.reference,
+        })),
+      } : undefined,
     };
   }
 }

@@ -56,7 +56,7 @@ export class RejectAccountLifecycleV1Dto {
   @IsString() @IsNotEmpty() @MaxLength(500) reason!: string;
 }
 
-const POSITIVE_DECIMAL_PATTERN = /^([1-9][0-9]*(\.[0-9]{1,2})?|0\.0*[1-9][0-9]?)$/;
+const POSITIVE_DECIMAL_PATTERN = /^(?:[1-9][0-9]*(?:\.[0-9]{1,2})?|0\.(?:0[1-9]|[1-9][0-9]?))$/;
 
 export class FinancialAdjustmentMoneyV1Dto {
   @IsString() @Matches(POSITIVE_DECIMAL_PATTERN) amount!: string;
