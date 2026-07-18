@@ -9,7 +9,6 @@ coverage/
 
 # Canonical MAVULA agent instructions
 .agents/*
-!.agents/AGENTS.md
 !.agents/skills/
 .agents/skills/*
 !.agents/skills/mavula-review/
