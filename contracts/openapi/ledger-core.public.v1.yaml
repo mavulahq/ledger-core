@@ -9,7 +9,7 @@ info:
     name: GNU Affero General Public License v3.0 only
     identifier: AGPL-3.0-only
 servers:
-  - url: https://ledger.mavula.dev
+  - url: https://ledger.mavula.io
     description: Ledger Core public endpoint
 security: [{ bearerAuth: [] }]
 tags:
@@ -717,8 +717,8 @@ components:
       required: [account_code]
       properties:
         account_code: { type: string, minLength: 1, maxLength: 64 }
-        debit_amount: { type: string }
-        credit_amount: { type: string }
+        debit_amount: { type: string, pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?$' }
+        credit_amount: { type: string, pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?$' }
     AccountPosting:
       type: object
       additionalProperties: false
@@ -726,7 +726,7 @@ components:
       properties:
         account_id: { type: string }
         direction: { type: string, enum: [DEBIT, CREDIT] }
-        amount: { type: string }
+        amount: { type: string, pattern: '^(?:[1-9][0-9]*(?:\.[0-9]{1,2})?|0\.(?:0[1-9]|[1-9][0-9]?))$' }
         currency: { type: string, pattern: '^[A-Z]{3}$' }
         reference: { type: string, maxLength: 160 }
     FinancialCorrection:
@@ -737,12 +737,15 @@ components:
           type: object
           required: [amount, currency]
           properties:
-            amount: { type: string }
+            amount: { type: string, pattern: '^(?:[1-9][0-9]*(?:\.[0-9]{1,2})?|0\.(?:0[1-9]|[1-9][0-9]?))$' }
             currency: { type: string, pattern: '^[A-Z]{3}$' }
             allocation:
               type: object
               required: [principal, interest, fees]
-              properties: { principal: { type: string }, interest: { type: string }, fees: { type: string } }
+              properties:
+                principal: { type: string, pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?$' }
+                interest: { type: string, pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?$' }
+                fees: { type: string, pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?$' }
         journal:
           type: object
           required: [ledger_lines]
@@ -760,28 +763,32 @@ components:
         reason: { type: string, minLength: 1, maxLength: 500 }
         correction: { $ref: '#/components/schemas/FinancialCorrection' }
     FinancialAdjustmentRequest:
-      allOf:
-        - $ref: '#/components/schemas/CreateFinancialAdjustment'
-        - type: object
-          required: [id, status, requested_by, correlation_id, created_at]
-          properties:
-            id: { type: string }
-            status: { $ref: '#/components/schemas/DecisionStatus' }
-            target_transaction_id: { type: string }
-            target_journal_entry_id: { type: string }
-            target_loan_id: { type: string }
-            requested_by: { type: string }
-            decided_by: { type: string }
-            decision_reason: { type: string }
-            failure_reason: { type: string }
-            correlation_id: { type: string }
-            reversal_transaction_id: { type: string }
-            reversal_journal_entry_id: { type: string }
-            replacement_transaction_id: { type: string }
-            replacement_journal_entry_id: { type: string }
-            created_at: { type: string, format: date-time }
-            decided_at: { type: string, format: date-time }
-            applied_at: { type: string, format: date-time }
+      type: object
+      additionalProperties: false
+      required: [id, target_type, target_id, adjustment_type, status, reason, requested_by, correlation_id, created_at]
+      properties:
+        id: { type: string }
+        target_type: { type: string, enum: [TRANSACTION, JOURNAL_ENTRY] }
+        target_id: { type: string, minLength: 1, maxLength: 128 }
+        adjustment_type: { type: string, enum: [REVERSAL, CORRECTION] }
+        status: { $ref: '#/components/schemas/DecisionStatus' }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+        correction: { $ref: '#/components/schemas/FinancialCorrection' }
+        target_transaction_id: { type: string }
+        target_journal_entry_id: { type: string }
+        target_loan_id: { type: string }
+        requested_by: { type: string }
+        decided_by: { type: string }
+        decision_reason: { type: string }
+        failure_reason: { type: string }
+        correlation_id: { type: string }
+        reversal_transaction_id: { type: string }
+        reversal_journal_entry_id: { type: string }
+        replacement_transaction_id: { type: string }
+        replacement_journal_entry_id: { type: string }
+        created_at: { type: string, format: date-time }
+        decided_at: { type: string, format: date-time }
+        applied_at: { type: string, format: date-time }
     FinancialAdjustmentPage:
       type: object
       required: [items]
