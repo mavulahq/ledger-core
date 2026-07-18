@@ -20,6 +20,7 @@ export const canonicalAgentFiles = Object.freeze([
 export const canonicalAgentAdapters = Object.freeze([
   ".cursor/rules/mavula-engineering.mdc",
   ".github/copilot-instructions.md",
+  "CLAUDE.md",
 ]);
 
 export const canonicalAgentDigests = Object.freeze({
@@ -36,6 +37,7 @@ export const canonicalAgentDigests = Object.freeze({
   ".agents/skills/mavula-cloud-banking/references/security-regulation.md": "7f6ed9f897b1b6acf98e29687f4744da8fbdf21edfef8f75f217f938edb7bb20",
   ".cursor/rules/mavula-engineering.mdc": "5808eae2c61ed71c9986f238a8df46a2dd5d47fdb144dfdb5d1ab59e8845a736",
   ".github/copilot-instructions.md": "e559442e010dd5baf747999f51e828bf9224c4a990cb83c0322f99986cbe87e1",
+  "CLAUDE.md": "b450943d31e250744342e8162d2418883ce8f3792a863e5d3353ef94f7c2fd13",
 });
 
 function sha256(file) {
@@ -67,6 +69,9 @@ export function enforceLocalAgentPolicy({ root = "." } = {}) {
 
   const allowedAgents = new Set(canonicalAgentFiles);
   for (const file of trackedFiles) {
+    if (file === ".cursorrules") {
+      failures.push(`${file} conflicts with the canonical Cursor policy`);
+    }
     if (file.startsWith(".agents/") && !allowedAgents.has(file)) {
       failures.push(`${file} is not part of the canonical agent policy`);
     }
@@ -76,9 +81,21 @@ export function enforceLocalAgentPolicy({ root = "." } = {}) {
     if (file.startsWith(".github/instructions/")) {
       failures.push(`${file} is not part of the canonical Copilot policy`);
     }
+    if (file.startsWith(".claude/")) {
+      failures.push(`${file} conflicts with the canonical Claude policy`);
+    }
     const basename = file.split("/").at(-1);
-    if (["AGENTS.md", "AGENTS.override.md"].includes(basename) && file !== "AGENTS.md") {
+    if (
+      (["AGENTS.md", "AGENTS.override.md"].includes(basename) && file !== "AGENTS.md")
+      || (basename === "CLAUDE.md" && file !== "CLAUDE.md")
+    ) {
       failures.push(`${file} conflicts with the root agent entry point`);
+    }
+    if (file === ".vscode/settings.json") {
+      const settings = readFileSync(join(root, file), "utf8");
+      if (/"(?:chat\.instructionsFilesLocations|github\.copilot\.chat\.[^"]*\.instructions)"\s*:/.test(settings)) {
+        failures.push(`${file} contains an alternate VS Code instruction source`);
+      }
     }
   }
 
@@ -86,6 +103,7 @@ export function enforceLocalAgentPolicy({ root = "." } = {}) {
     "AGENTS.md",
     ".cursor/rules/mavula-engineering.mdc",
     ".github/copilot-instructions.md",
+    "CLAUDE.md",
   ]) {
     const absolutePath = join(root, file);
     if (!existsSync(absolutePath)) continue;
