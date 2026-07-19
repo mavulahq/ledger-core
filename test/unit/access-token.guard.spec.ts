@@ -49,21 +49,46 @@ describe('AccessTokenGuard', () => {
     await expect(guard.canActivate(context(request))).rejects.toThrow('does not match');
   });
 
-  async function accessToken() {
-    return new jose.SignJWT({
-      tenant_id: 'tenant-1',
-      institution_id: 'institution-1',
+  it('rejects blank or whitespace identity claims', async () => {
+    process.env.OIDC_ISSUER = 'https://identity.mavula.io';
+    process.env.OIDC_AUDIENCE = 'urn:mavula:ledger-core';
+    process.env.OIDC_JWKS_URI = jwksUri;
+    const guard = new AccessTokenGuard(new Reflector(), { recordSecurityFailure: jest.fn() } as any);
+    for (const claims of [
+      { sub: '   ', tenant_id: 'tenant-1', institution_id: 'institution-1' },
+      { sub: 'operator-1', tenant_id: '', institution_id: 'institution-1' },
+      { sub: 'operator-1', tenant_id: 'tenant-1', institution_id: ' \t' },
+    ]) {
+      const token = await accessToken(claims);
+      const request: any = { headers: { authorization: `Bearer ${token}` } };
+      await expect(guard.canActivate(context(request))).rejects.toThrow('Invalid access token');
+    }
+  });
+
+  async function accessToken(overrides: {
+    sub?: string;
+    tenant_id?: string;
+    institution_id?: string;
+  } = {}) {
+    const payload = {
+      tenant_id: overrides.tenant_id ?? 'tenant-1',
+      institution_id: overrides.institution_id ?? 'institution-1',
       roles: ['auditor'],
       permissions: ['finance.read', 'audit.read'],
-    })
+    };
+    let builder = new jose.SignJWT(payload)
       .setProtectedHeader({ alg: 'PS256', kid: 'guard-test', typ: 'at+jwt' })
-      .setSubject('operator-1')
       .setIssuer('https://identity.mavula.io')
       .setAudience('urn:mavula:ledger-core')
       .setIssuedAt()
       .setExpirationTime('5m')
-      .setJti('token-1')
-      .sign(privateKey);
+      .setJti('token-1');
+    if (overrides.sub !== undefined) {
+      builder = builder.setSubject(overrides.sub);
+    } else {
+      builder = builder.setSubject('operator-1');
+    }
+    return builder.sign(privateKey);
   }
 });
 

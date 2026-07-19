@@ -6,6 +6,7 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { WorkerQueueService } from '../worker/worker-queue.service';
 import { DomainEventWorkerCallback, EngineEventCallback, EnqueueEngineEventInput } from '../worker/worker.types';
 import { RegulatoryExportSourceService, type RegulatoryExportSourceRequest } from '../regulatory/regulatory-export-source.service';
+import { AuditTrailService } from '../services/audit-trail.service';
 
 @Controller('internal/worker')
 @RequirePermissions('internal.worker')
@@ -16,16 +17,45 @@ export class InternalWorkerController {
     private readonly outboxPublisher: DomainOutboxPublisherService,
     private readonly projections: ReadProjectionService,
     private readonly regulatoryExports: RegulatoryExportSourceService,
+    private readonly audit: AuditTrailService,
   ) {}
 
   @Post('regulatory-transaction-records')
+  @RequirePermissions('internal.worker', 'regulatory.export')
   async regulatoryTransactionRecords(@Req() req: any, @Body() body: RegulatoryExportSourceRequest) {
-    this.assertTenant(req, body?.tenant_id);
-    if (!body?.institution_id || body.institution_id !== req.identity?.institution_id) {
-      throw new ForbiddenException('Authenticated institution context does not match the request');
+    try {
+      this.assertTenant(req, body?.tenant_id);
+      if (!body?.institution_id || body.institution_id !== req.identity?.institution_id) {
+        throw new ForbiddenException('Authenticated institution context does not match the request');
+      }
+    } catch (error) {
+      if (error instanceof ForbiddenException) {
+        this.auditExportRejected(req, body, error.message);
+      }
+      throw error;
     }
     try {
-      return await this.regulatoryExports.page(body);
+      const page = await this.regulatoryExports.page(body);
+      this.audit.record({
+        tenant_id: body.tenant_id,
+        action: 'regulatory.export.source',
+        entity_type: 'regulatory_export',
+        entity_id: `${body.period_from}_${body.period_to}`,
+        stage: 'DISPATCHED',
+        result: 'SUCCEEDED',
+        source: 'WORKER',
+        actor_id: req.identity?.sub,
+        actor_roles: req.identity?.roles,
+        institution_id: body.institution_id,
+        metadata: {
+          period_from: body.period_from,
+          period_to: body.period_to,
+          record_count: page.records.length,
+          rejection_count: page.rejections.length,
+          legal_basis_code: body.legal_basis_code,
+        },
+      });
+      return page;
     } catch (error) {
       throw new BadRequestException((error as Error).message);
     }
@@ -110,6 +140,37 @@ export class InternalWorkerController {
     if (!tenantId || tenantId !== this.tenant(req)) {
       throw new ForbiddenException('Authenticated tenant context does not match the request');
     }
+  }
+
+  private auditExportRejected(
+    req: any,
+    body: RegulatoryExportSourceRequest | undefined,
+    reason: string,
+  ): void {
+    const tenantId = typeof body?.tenant_id === 'string' && body.tenant_id.trim()
+      ? body.tenant_id
+      : req.tenantId;
+    if (!tenantId) return;
+    this.audit.record({
+      tenant_id: tenantId,
+      action: 'regulatory.export.source',
+      entity_type: 'regulatory_export',
+      entity_id: body?.period_from && body?.period_to
+        ? `${body.period_from}_${body.period_to}`
+        : 'unauthorized',
+      stage: 'DISPATCHED',
+      result: 'REJECTED',
+      source: 'WORKER',
+      actor_id: req.identity?.sub,
+      actor_roles: req.identity?.roles,
+      institution_id: body?.institution_id || req.institutionId,
+      reason,
+      metadata: {
+        period_from: body?.period_from,
+        period_to: body?.period_to,
+        legal_basis_code: body?.legal_basis_code,
+      },
+    });
   }
 
   private tenant(req: any): string {

@@ -82,9 +82,9 @@ export class AccessTokenGuard implements CanActivate {
 
   private assertClaims(payload: Record<string, unknown>) {
     if (
-      typeof payload.sub !== 'string' ||
-      typeof payload.tenant_id !== 'string' ||
-      typeof payload.institution_id !== 'string' ||
+      !nonEmptyClaim(payload.sub) ||
+      !nonEmptyClaim(payload.tenant_id) ||
+      !nonEmptyClaim(payload.institution_id) ||
       !Array.isArray(payload.roles) ||
       !Array.isArray(payload.permissions) ||
       payload.roles.some((role) => typeof role !== 'string') ||
@@ -105,4 +105,8 @@ let joseModule: Promise<typeof import('jose')> | undefined;
 function loadJose() {
   joseModule ||= (new Function('return import("jose")') as () => Promise<typeof import('jose')>)();
   return joseModule;
+}
+
+function nonEmptyClaim(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
