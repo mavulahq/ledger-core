@@ -66,6 +66,9 @@ export class EngineEventService {
     const consumerName = 'fengine.workflow-dispatch';
     const processing = await this.inbox.startProcessing(event, consumerName);
     if (!processing.started) {
+      if (processing.record.status !== 'PROCESSED') {
+        throw new Error(`Domain event is already being processed: ${event.event_id}`);
+      }
       return {
         accepted: true,
         event_id: event.event_id,

@@ -220,6 +220,40 @@ describe('ledger-core worker communication', () => {
     expect(schemas.executeWorkflow).toHaveBeenCalledTimes(1);
   });
 
+  it('does not acknowledge a domain event that is still being processed', async () => {
+    const schemas = {
+      getWorkflowsByTrigger: jest.fn(),
+      executeWorkflow: jest.fn(),
+    };
+    const audit = { record: jest.fn() };
+    const inbox = new DomainInboxService({ isConfigured: false } as any);
+    const service = new EngineEventService(schemas as any, audit as any, inbox);
+    const event = new DomainEventFactory().lendingPaymentPosted({
+      tenantId: 'tenant_001',
+      loan: approvedLoan(),
+      transactionId: 'txn_in_flight',
+      sourceAccountId: 'CUST_cust_001',
+      paymentAmount: 2500,
+      currency: 'MZN',
+      allocation: {
+        principal_payment: 1375,
+        interest_payment: 625,
+        fee_payment: 500,
+        balance_after: 23625,
+      },
+      idempotencyKey: 'idem_in_flight',
+    });
+
+    await inbox.startProcessing(event, 'fengine.workflow-dispatch');
+
+    await expect(service.handleDomainEvent(event, 'job_retry')).rejects.toThrow(
+      `Domain event is already being processed: ${event.event_id}`,
+    );
+    expect(schemas.getWorkflowsByTrigger).not.toHaveBeenCalled();
+    expect(schemas.executeWorkflow).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
   it('keeps payment settlement events outside active financial processing', async () => {
     const schemas = {
       getWorkflowsByTrigger: jest.fn().mockResolvedValue([{ workflow_id: 'wf_settlement_001' }]),
