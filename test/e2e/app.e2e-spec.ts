@@ -55,6 +55,13 @@ describe('ledger-core (e2e)', () => {
     )).toThrow('Authenticated tenant context does not match the request');
   });
 
+  it('rejects operator identities on domain event callbacks', () => {
+    expect(() => internalWorkerController.domainCallback(
+      { tenantId: 'tenant_e2e', identity: { sub: 'operator-1', institution_id: 'institution_e2e' } },
+      { event: { tenant_id: 'tenant_e2e' } } as any,
+    )).toThrow('Domain event callbacks require a service identity');
+  });
+
   it('/api/health (GET)', async () => {
     expect(appController.health({ tenantId: undefined })).toMatchObject({
       status: 'ok',

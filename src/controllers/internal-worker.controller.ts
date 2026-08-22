@@ -56,6 +56,7 @@ export class InternalWorkerController {
     if (!body?.job_id) throw new BadRequestException('job_id is required');
     this.validateEvent(body);
     this.assertTenant(req, body.tenant_id);
+    this.assertServiceIdentity(req);
     return this.events.handle({ ...body, payload: body.payload || {} });
   }
 
@@ -63,6 +64,7 @@ export class InternalWorkerController {
   domainCallback(@Req() req: any, @Body() body: DomainEventWorkerCallback) {
     if (!body?.event) throw new BadRequestException('event is required');
     this.assertTenant(req, body.event.tenant_id);
+    this.assertServiceIdentity(req);
     return this.events.handleDomainEvent(body.event, body.job_id);
   }
 
@@ -114,5 +116,12 @@ export class InternalWorkerController {
 
   private tenant(req: any): string {
     return req.tenantId;
+  }
+
+  private assertServiceIdentity(req: any): void {
+    const subject = req.identity?.sub || req.identity?.subject;
+    if (typeof subject !== 'string' || !subject.startsWith('client:')) {
+      throw new ForbiddenException('Domain event callbacks require a service identity');
+    }
   }
 }
