@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import { createHash } from 'crypto';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../services/prisma.service';
 import { LedgerService } from '../ledger/ledger.service';
@@ -110,7 +111,7 @@ export class TransactionService {
     currentBalance: number;
     idempotencyKey?: string;
   }): Promise<SettlementResult> {
-    const txnId = `txn_${params.loanId}_${Date.now()}`;
+    const txnId = this.stableTransactionId('txn', params.tenantId, params.loanId, params.idempotencyKey);
 
     try {
       const replay = await this.getIdempotentResult(params.tenantId, params.idempotencyKey);
@@ -227,7 +228,7 @@ export class TransactionService {
     currency: string;
     idempotencyKey?: string;
   }): Promise<SettlementResult> {
-    const txnId = `disburse_${params.loanId}_${Date.now()}`;
+    const txnId = this.stableTransactionId('disburse', params.tenantId, params.loanId, params.idempotencyKey);
 
     try {
       const replay = await this.getIdempotentResult(params.tenantId, params.idempotencyKey);
@@ -384,6 +385,27 @@ export class TransactionService {
       error,
       timestamp: new Date(),
     };
+  }
+
+  /**
+   * Journal posting is idempotent on entry_id (`je_${transactionId}`). Time-based
+   * IDs made retries after a successful GL write post a second balanced entry.
+   */
+  private stableTransactionId(
+    prefix: string,
+    tenantId: string,
+    fallbackKey: string,
+    idempotencyKey?: string,
+  ): string {
+    if (!idempotencyKey) {
+      return `${prefix}_${fallbackKey}_${Date.now()}`;
+    }
+
+    const digest = createHash('sha256')
+      .update(`${prefix}:${tenantId}:${idempotencyKey}`)
+      .digest('hex')
+      .slice(0, 32);
+    return `${prefix}_${digest}`;
   }
 
   private async getIdempotentResult(tenantId: string, key?: string): Promise<SettlementResult | undefined> {
