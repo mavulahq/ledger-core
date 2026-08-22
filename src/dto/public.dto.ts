@@ -186,6 +186,10 @@ export class WorkflowStepV1Dto {
   @IsOptional() @IsString() condition?: string;
 }
 
+export class WorkflowListQueryV1Dto {
+  @IsOptional() @IsString() @Matches(/^[A-Z][A-Z0-9_]{2,100}$/) trigger?: string;
+}
+
 export class CreateWorkflowV1Dto {
   @IsString() @IsNotEmpty() @MaxLength(160) name!: string;
   @IsString() @Matches(/^[A-Z][A-Z0-9_]{2,100}$/) trigger!: string;

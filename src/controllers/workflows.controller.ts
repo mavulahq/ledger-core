@@ -1,7 +1,7 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post, Query, Req } from '@nestjs/common';
 import { SchemaManagerService } from '../schema-manager/schema-manager.service';
 import { RequirePermissions } from '../auth/permissions.decorator';
-import { CreateWorkflowV1Dto, ExecuteWorkflowV1Dto } from '../dto/public.dto';
+import { CreateWorkflowV1Dto, ExecuteWorkflowV1Dto, WorkflowListQueryV1Dto } from '../dto/public.dto';
 import { IdempotentOperation } from '../idempotency/idempotent-operation.decorator';
 
 @Controller('workflows')
@@ -10,13 +10,11 @@ export class WorkflowsController {
   constructor(private readonly schemas: SchemaManagerService) {}
 
   @Get()
-  async list(@Req() req: any) {
+  async list(@Req() req: any, @Query() query: WorkflowListQueryV1Dto) {
+    if (query.trigger) {
+      return this.schemas.getWorkflowsByTrigger(this.tenant(req), query.trigger);
+    }
     return this.schemas.listWorkflows(this.tenant(req));
-  }
-
-  @Get('trigger/:trigger')
-  async listByTrigger(@Req() req: any, @Param('trigger') trigger: string) {
-    return this.schemas.getWorkflowsByTrigger(this.tenant(req), trigger);
   }
 
   @Get(':workflowId')

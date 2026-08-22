@@ -16,7 +16,7 @@ const expected = [
   '/api/products/{productId}/rules', '/api/products/{productId}/rules/defaults',
   '/api/products/{productId}/rules/{ruleId}', '/api/schemas', '/api/schemas/import',
   '/api/schemas/presets/business-registration', '/api/schemas/{schemaId}', '/api/schemas/{schemaId}/export',
-  '/api/workflows', '/api/workflows/trigger/{trigger}', '/api/workflows/presets/loan-approval-notification',
+  '/api/workflows', '/api/workflows/presets/loan-approval-notification',
   '/api/workflows/presets/monthly-fee-charge', '/api/workflows/{workflowId}', '/api/workflows/{workflowId}/execute',
   '/api/projections/status', '/api/projections/loan-activity', '/api/projections/loan-activity/{loanId}',
   '/api/projections/ledger-activity', '/api/projections/ledger-activity/{journalEntryId}',

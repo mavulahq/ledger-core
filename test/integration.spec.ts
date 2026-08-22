@@ -276,6 +276,15 @@ describe('fengine - Integration Tests (app composition)', () => {
       );
       const result = await workflowsController.execute({ tenantId }, workflow.workflow_id, { context: {} });
       expect(result.success).toBe(true);
+      await expect(workflowsController.list({ tenantId }, {})).resolves.toEqual(
+        expect.arrayContaining([expect.objectContaining({ workflow_id: workflow.workflow_id, trigger: 'API_TEST' })]),
+      );
+      const matched = await workflowsController.list({ tenantId }, { trigger: 'API_TEST' });
+      expect(matched.every((item) => item.trigger === 'API_TEST')).toBe(true);
+      expect(matched).toEqual(
+        expect.arrayContaining([expect.objectContaining({ workflow_id: workflow.workflow_id, trigger: 'API_TEST' })]),
+      );
+      await expect(workflowsController.list({ tenantId }, { trigger: 'OTHER_TRIGGER' })).resolves.toEqual([]);
     });
 
     it('executes workflow conditions and formulas without dynamic code evaluation', async () => {

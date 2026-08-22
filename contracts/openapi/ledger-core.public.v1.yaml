@@ -465,6 +465,7 @@ paths:
       summary: List workflows
       tags: [Workflows]
       x-mavula-permissions: [finance.read]
+      parameters: [{ $ref: '#/components/parameters/WorkflowTrigger' }]
       responses:
         '200': { description: Workflows, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Workflow' } } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -482,17 +483,6 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /api/workflows/trigger/{trigger}:
-    get:
-      operationId: listWorkflowsByTrigger
-      summary: List workflows by trigger
-      tags: [Workflows]
-      x-mavula-permissions: [finance.read]
-      parameters: [{ in: path, name: trigger, required: true, schema: { type: string } }]
-      responses:
-        '200': { description: Matching workflows, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Workflow' } } } } }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
   /api/workflows/presets/loan-approval-notification:
     post:
       operationId: createLoanApprovalNotificationWorkflow
@@ -581,6 +571,7 @@ components:
     RuleId: { in: path, name: ruleId, required: true, schema: { type: string } }
     SchemaId: { in: path, name: schemaId, required: true, schema: { type: string } }
     WorkflowId: { in: path, name: workflowId, required: true, schema: { type: string } }
+    WorkflowTrigger: { in: query, name: trigger, required: false, description: 'When provided, return only workflows registered for this trigger.', schema: { type: string, pattern: '^[A-Z][A-Z0-9_]{2,100}$' } }
   requestBodies:
     OptionalDecision:
       required: true
