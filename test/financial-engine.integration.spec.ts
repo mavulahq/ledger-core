@@ -647,6 +647,89 @@ describe('Financial engine loan lifecycle integration', () => {
     expect(repairedEvent?.envelope.aggregate.version).toBe(repairedLoan?.version);
   });
 
+  it('charges later payments against remaining principal and accepts prepayment', async () => {
+    const loan = await loanService.applyForLoan(tenantId, {
+      customer_id: customerId,
+      product_id: productId,
+      loan_type: LoanType.PERSONAL,
+      requested_amount: 25000,
+      requested_term_months: 12,
+      purpose: 'Sequential payment allocation',
+      metadata: {},
+    });
+
+    await loanService.approveLoan(tenantId, loan, {
+      credit_score: 650,
+      income: 120000,
+      employment_years: 5,
+    });
+    await ledgerService.initializeChartOfAccounts(tenantId);
+    await loanService.disburseLoan(tenantId, loan, {
+      idempotencyKey: `idem_disburse_seq_${loan.id}`,
+    });
+
+    const firstPayment = await loanService.processLoanPayment(tenantId, loan, 2500, {
+      idempotencyKey: `idem_payment_seq_1_${loan.id}`,
+    });
+    const remainingAfterFirst = firstPayment.balance_remaining;
+    const expectedSecondInterest = Number(
+      (remainingAfterFirst * loan.monthly_rate).toFixed(2),
+    );
+    const firstInstallmentInterest = Number((loan.principal_amount * loan.monthly_rate).toFixed(2));
+
+    const secondPayment = await loanService.processLoanPayment(tenantId, loan, 5000, {
+      idempotencyKey: `idem_payment_seq_2_${loan.id}`,
+    });
+
+    expect(secondPayment.success).toBe(true);
+    expect(secondPayment.interest_paid).toBe(expectedSecondInterest);
+    expect(secondPayment.interest_paid).toBeLessThan(firstInstallmentInterest);
+    expect(secondPayment.principal_paid).toBe(
+      Number((5000 - expectedSecondInterest).toFixed(2)),
+    );
+    expect(secondPayment.balance_remaining).toBe(
+      Number((remainingAfterFirst - secondPayment.principal_paid).toFixed(2)),
+    );
+    expect(loan.remaining_balance).toBe(secondPayment.balance_remaining);
+  });
+
+  it('rejects a payment that exceeds outstanding fees, interest, and principal', async () => {
+    const loan = await loanService.applyForLoan(tenantId, {
+      customer_id: customerId,
+      product_id: productId,
+      loan_type: LoanType.PERSONAL,
+      requested_amount: 25000,
+      requested_term_months: 12,
+      purpose: 'Overpayment rejection',
+      metadata: {},
+    });
+
+    await loanService.approveLoan(tenantId, loan, {
+      credit_score: 650,
+      income: 120000,
+      employment_years: 5,
+    });
+    await ledgerService.initializeChartOfAccounts(tenantId);
+    await loanService.disburseLoan(tenantId, loan, {
+      idempotencyKey: `idem_disburse_overpay_${loan.id}`,
+    });
+
+    const journalsBefore = (await ledgerService.listEntries(tenantId)).length;
+    const outstanding =
+      loan.remaining_balance +
+      Number((loan.remaining_balance * loan.monthly_rate).toFixed(2)) +
+      loan.origination_fee_amount;
+
+    await expect(
+      loanService.processLoanPayment(tenantId, loan, outstanding + 1, {
+        idempotencyKey: `idem_payment_overpay_${loan.id}`,
+      }),
+    ).rejects.toThrow('Payment exceeds outstanding fees, interest, and principal');
+
+    expect(loan.remaining_balance).toBe(25000);
+    expect((await ledgerService.listEntries(tenantId)).length).toBe(journalsBefore);
+  });
+
 });
 
 function projectionLoan(productId: string): Loan {

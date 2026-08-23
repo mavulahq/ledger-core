@@ -147,6 +147,19 @@ export class TransactionService {
         fees_due: params.feesDue,
         current_balance: params.currentBalance,
       });
+      const allocated = Number(
+        (
+          allocation.principal_payment +
+          allocation.interest_payment +
+          allocation.fee_payment
+        ).toFixed(2),
+      );
+      if (Math.abs(allocated - Number(params.paymentAmount.toFixed(2))) > 0.01) {
+        return this.failedResult(
+          txnId,
+          'Payment exceeds outstanding fees, interest, and principal',
+        );
+      }
 
       // Step 5: Record in General Ledger
       await this.ledger.recordPaymentTransaction({

@@ -10,6 +10,7 @@
  */
 
 import { Injectable } from '@nestjs/common';
+import Decimal from 'decimal.js';
 import { PrismaService } from '../services/prisma.service';
 import { Transaction, TransactionService } from '../transactions/transaction.service';
 import { RuleEvaluationStage, RulesEngineService } from '../rules-engine/rules-engine.service';
@@ -495,13 +496,14 @@ export class LoanService {
       throw new Error(`Cannot process payment for loan in ${loan.status} status`);
     }
 
-    // Calculate interest due
-    const schedule = this.generateAmortizationSchedule(loan);
-    const nextInstallment =
-      schedule.find((item) => item.closing_balance < loan.remaining_balance + 0.0001) ||
-      schedule[0];
-    const interestDue = nextInstallment?.interest || loan.remaining_balance * loan.monthly_rate;
-    const principalDue = nextInstallment?.principal || Math.max(paymentAmount - interestDue, 0);
+    // Accrue current-period interest on the outstanding principal so later
+    // payments do not reuse the first installment's interest, and allow extra
+    // cash to prepay principal instead of leaving an unbalanced journal.
+    const interestDue = new Decimal(loan.remaining_balance)
+      .mul(loan.monthly_rate)
+      .toDecimalPlaces(2)
+      .toNumber();
+    const principalDue = loan.remaining_balance;
     const feeDue = loan.total_paid_fees === 0 ? loan.origination_fee_amount : 0;
 
     const result = await this.transactionService.processPayment({

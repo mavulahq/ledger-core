@@ -153,7 +153,7 @@ export function calculateDailyAccrualInterest(params: {
 
 /**
  * Allocate payment across principal, interest, and fees
- * Priority: fees → interest → principal
+ * Priority: fees → interest → outstanding principal (including prepayment)
  */
 export function allocatePayment(params: {
   payment_amount: number;
@@ -172,8 +172,10 @@ export function allocatePayment(params: {
   const interest_payment = Decimal.min(remaining, params.interest_due).toDecimalPlaces(2);
   remaining = remaining.minus(interest_payment);
 
-  // Finally, pay principal
-  const principal_payment = Decimal.min(remaining, params.principal_due).toDecimalPlaces(2);
+  // Then pay down outstanding principal, including amounts above this
+  // installment, so extra payments do not disappear from the allocation.
+  const principalCap = Decimal.max(0, params.current_balance);
+  const principal_payment = Decimal.min(remaining, principalCap).toDecimalPlaces(2);
 
   return {
     principal_payment: principal_payment.toNumber(),
