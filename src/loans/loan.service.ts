@@ -24,6 +24,7 @@ import {
   generateAmortizationSchedule,
   generateLoanScenarios,
   getMonthlyRateFromAPR,
+  type PaymentAllocation,
 } from '../calculations/financial-calculations';
 
 export enum LoanStatus {
@@ -472,23 +473,15 @@ export class LoanService {
     const replay = await this.store.getTransactionByIdempotencyKey(tenantId, idempotencyKey);
     const settlement = replay?.metadata?.settlement_result;
     if (settlement?.posting_status === 'SUCCESS' && settlement.allocation) {
-      const persistedLoan = (await this.store.getLoan(tenantId, loan.id)) || loan;
-      await this.ensurePaymentPostedOutbox(
+      return this.replayPostedPayment(
         tenantId,
-        persistedLoan,
-        settlement.transaction_id || replay.id,
-        Number(replay.amount),
+        loan,
+        this.positiveAmount(replay.amount, paymentAmount),
         settlement.allocation,
+        settlement.transaction_id || replay.id,
         idempotencyKey,
-        this.replayAggregateVersion(replay, 'lending.payment_posted') || persistedLoan.version,
+        replay,
       );
-      return {
-        success: true,
-        principal_paid: settlement.allocation.principal_payment,
-        interest_paid: settlement.allocation.interest_payment,
-        balance_remaining: Math.max(settlement.allocation.balance_after, 0),
-        idempotent: true,
-      };
     }
 
     if (loan.status !== LoanStatus.ACTIVE && loan.status !== LoanStatus.DEFAULTED) {
@@ -521,24 +514,16 @@ export class LoanService {
 
     if (result.posting_status === 'SUCCESS') {
       if (result.idempotent && result.allocation) {
-        const replay = await this.store.getTransactionByIdempotencyKey(tenantId, idempotencyKey);
-        const persistedLoan = (await this.store.getLoan(tenantId, loan.id)) || loan;
-        await this.ensurePaymentPostedOutbox(
+        const stored = await this.store.getTransactionByIdempotencyKey(tenantId, idempotencyKey);
+        return this.replayPostedPayment(
           tenantId,
-          persistedLoan,
-          result.transaction_id,
-          this.positiveAmount(replay?.amount, paymentAmount),
+          loan,
+          this.positiveAmount(stored?.amount, paymentAmount),
           result.allocation,
+          result.transaction_id,
           idempotencyKey,
-          this.replayAggregateVersion(replay, 'lending.payment_posted') || persistedLoan.version,
+          stored,
         );
-        return {
-          success: true,
-          principal_paid: result.allocation.principal_payment,
-          interest_paid: result.allocation.interest_payment,
-          balance_remaining: Math.max(result.allocation.balance_after, 0),
-          idempotent: true,
-        };
       }
 
       const allocation = allocatePayment({
@@ -614,6 +599,63 @@ export class LoanService {
   private bumpLoanVersion(loan: Loan): void {
     loan.version = Math.max(1, Number(loan.version || 1)) + 1;
     loan.updated_at = new Date();
+  }
+
+  private async replayPostedPayment(
+    tenantId: string,
+    loan: Loan,
+    paymentAmount: number,
+    allocation: PaymentAllocation,
+    transactionId: string,
+    idempotencyKey: string,
+    replay?: Transaction,
+  ): Promise<{
+    success: true;
+    principal_paid: number;
+    interest_paid: number;
+    balance_remaining: number;
+    idempotent: true;
+  }> {
+    const persistedLoan = (await this.store.getLoan(tenantId, loan.id)) || loan;
+    const repairedLoan = await this.ensureLoanPaymentState(tenantId, persistedLoan, allocation);
+    await this.ensurePaymentPostedOutbox(
+      tenantId,
+      repairedLoan,
+      transactionId,
+      paymentAmount,
+      allocation,
+      idempotencyKey,
+      this.replayAggregateVersion(replay, 'lending.payment_posted') || repairedLoan.version,
+    );
+    return {
+      success: true,
+      principal_paid: allocation.principal_payment,
+      interest_paid: allocation.interest_payment,
+      balance_remaining: Math.max(allocation.balance_after, 0),
+      idempotent: true,
+    };
+  }
+
+  private async ensureLoanPaymentState(
+    tenantId: string,
+    loan: Loan,
+    allocation: PaymentAllocation,
+  ): Promise<Loan> {
+    const balanceAfter = Math.max(allocation.balance_after, 0);
+    if (loan.remaining_balance <= balanceAfter + 0.0001) {
+      return loan;
+    }
+
+    loan.total_paid_principal += allocation.principal_payment;
+    loan.total_paid_interest += allocation.interest_payment;
+    loan.total_paid_fees += allocation.fee_payment;
+    loan.remaining_balance = balanceAfter;
+    if (loan.remaining_balance <= 0) {
+      loan.status = LoanStatus.PAID_UP;
+    }
+    this.bumpLoanVersion(loan);
+    await this.store.saveLoan(tenantId, loan);
+    return loan;
   }
 
   private async ensureLoanDisbursedState(

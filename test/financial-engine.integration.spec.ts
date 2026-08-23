@@ -647,6 +647,75 @@ describe('Financial engine loan lifecycle integration', () => {
     expect(repairedEvent?.envelope.aggregate.version).toBe(repairedLoan?.version);
   });
 
+  it('repairs loan balances before replaying a payment event', async () => {
+    const loan = await loanService.applyForLoan(tenantId, {
+      customer_id: customerId,
+      product_id: productId,
+      loan_type: LoanType.PERSONAL,
+      requested_amount: 25000,
+      requested_term_months: 12,
+      purpose: 'Payment recovery test',
+      metadata: {},
+    });
+
+    await loanService.approveLoan(tenantId, loan, {
+      credit_score: 650,
+      income: 120000,
+      employment_years: 5,
+    });
+    await ledgerService.initializeChartOfAccounts(tenantId);
+    await loanService.disburseLoan(tenantId, loan, {
+      idempotencyKey: `idem_disburse_payment_repair_${loan.id}`,
+    });
+
+    const paymentKey = `idem_payment_repair_${loan.id}`;
+    const posted = await transactionService.processPayment({
+      tenantId,
+      customerId: loan.customer_id,
+      accountId: `CUST_${loan.customer_id}`,
+      loanId: loan.id,
+      paymentAmount: 2500,
+      currency: 'MZN',
+      productId: loan.product_id,
+      principalDue: 2125,
+      interestDue: 375,
+      feesDue: 0,
+      currentBalance: loan.remaining_balance,
+      idempotencyKey: paymentKey,
+    });
+
+    expect(posted.posting_status).toBe('SUCCESS');
+    expect(posted.allocation?.principal_payment).toBeGreaterThan(0);
+    expect(loan.total_paid_principal).toBe(0);
+    expect(loan.remaining_balance).toBe(25000);
+
+    const replayed = await loanService.processLoanPayment(tenantId, loan, 2500, {
+      idempotencyKey: paymentKey,
+    });
+    const repairedLoan = await loanService.getLoan(tenantId, loan.id);
+    const paymentEvents = await outboxService.list(tenantId);
+    const repairedEvent = paymentEvents.find(
+      (event) =>
+        event.envelope.event_type === 'lending.payment_posted' &&
+        event.envelope.aggregate.id === loan.id,
+    );
+
+    expect(replayed).toEqual({
+      success: true,
+      principal_paid: posted.allocation?.principal_payment,
+      interest_paid: posted.allocation?.interest_payment,
+      balance_remaining: Math.max(posted.allocation?.balance_after || 0, 0),
+      idempotent: true,
+    });
+    expect(repairedLoan?.total_paid_principal).toBe(replayed.principal_paid);
+    expect(repairedLoan?.total_paid_interest).toBe(replayed.interest_paid);
+    expect(repairedLoan?.remaining_balance).toBe(replayed.balance_remaining);
+    expect(repairedEvent?.envelope.payload.balance_after).toBe(
+      replayed.balance_remaining.toFixed(2),
+    );
+    expect(repairedEvent?.envelope.aggregate.version).toBe(repairedLoan?.version);
+  });
+
 });
 
 function projectionLoan(productId: string): Loan {
