@@ -23,6 +23,7 @@ export interface EngineWorkerJob {
   updated_at: string;
   result?: any;
   last_error?: string;
+  integrity?: string;
 }
 
 export interface EngineEventCallback {

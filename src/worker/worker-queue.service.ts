@@ -2,6 +2,7 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { createHash, randomUUID } from 'crypto';
 import { Job, JobsOptions, Queue } from 'bullmq';
 import { DomainEventEnvelope } from '../domain-events/domain-event.types';
+import { assertRedisUrlAuthenticated, signWorkerJob } from './job-integrity';
 import { EngineWorkerJob, EnqueueEngineEventInput } from './worker.types';
 
 @Injectable()
@@ -30,6 +31,7 @@ export class WorkerQueueService implements OnModuleDestroy {
       created_at: now,
       updated_at: now,
     };
+    job.integrity = signWorkerJob(job);
 
     if (!this.queue) {
       this.memory.set(id, job);
@@ -86,7 +88,9 @@ export class WorkerQueueService implements OnModuleDestroy {
   }
 
   private redisConnection() {
-    const parsed = new URL(process.env.REDIS_URL || 'redis://localhost:16379');
+    const redisUrl = process.env.REDIS_URL || 'redis://localhost:16379';
+    assertRedisUrlAuthenticated(redisUrl);
+    const parsed = new URL(redisUrl);
     return {
       host: parsed.hostname || 'localhost',
       port: Number(parsed.port || 6379),

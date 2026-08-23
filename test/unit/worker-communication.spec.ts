@@ -6,6 +6,7 @@ import { JournalEntry } from '../../src/ledger/ledger.service';
 import { Loan, LoanStatus, LoanType } from '../../src/loans/loan.service';
 import { ProductSchema, ProductType } from '../../src/products/product-config.service';
 import { EngineEventService } from '../../src/worker/engine-event.service';
+import { assertRedisUrlAuthenticated, assertWorkerJobIntegrity } from '../../src/worker/job-integrity';
 import { WorkerQueueService } from '../../src/worker/worker-queue.service';
 
 describe('ledger-core worker communication', () => {
@@ -33,8 +34,18 @@ describe('ledger-core worker communication', () => {
       payload: { loan_id: 'loan_001', event_type: 'LOAN_APPROVED' },
     });
     expect(first.id).toBe(jobId('tenant_001', 'loan-approved-001'));
+    expect(() => assertWorkerJobIntegrity(first)).not.toThrow();
+    expect(() => assertWorkerJobIntegrity({ ...first, tenant_id: 'tenant_002' })).toThrow(
+      'worker job integrity check failed',
+    );
     await expect(queue.get('tenant_001', first.id)).resolves.toEqual(first);
     await expect(queue.get('tenant_002', first.id)).resolves.toBeNull();
+  });
+
+  it('requires a Redis password in production before opening a queue connection', () => {
+    expect(() => assertRedisUrlAuthenticated('redis://localhost:16379', { NODE_ENV: 'production' })).toThrow(
+      'REDIS_URL must include a password in production',
+    );
   });
 
   it('publishes canonical domain events through the Outbox publisher', async () => {
