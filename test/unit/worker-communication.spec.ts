@@ -271,6 +271,87 @@ describe('ledger-core worker communication', () => {
     }));
   });
 
+  it('re-queues terminal FAILED outbox rows on idempotent append', async () => {
+    process.env.FENGINE_OUTBOX_MAX_ATTEMPTS = '3';
+    process.env.FENGINE_OUTBOX_BACKOFF_MS = '0';
+    const enqueueDomainEvent = jest.fn()
+      .mockRejectedValueOnce(new Error('redis unavailable'))
+      .mockRejectedValueOnce(new Error('redis unavailable'))
+      .mockRejectedValueOnce(new Error('redis unavailable'))
+      .mockResolvedValue(undefined);
+    const outbox = new DomainOutboxService({ isConfigured: false } as any);
+    const publisher = new DomainOutboxPublisherService(outbox, { enqueueDomainEvent } as any);
+    const event = new DomainEventFactory().lendingPaymentPosted({
+      tenantId: 'tenant_001',
+      loan: approvedLoan(),
+      transactionId: 'txn_loan_failed_outbox',
+      sourceAccountId: 'CUST_cust_001',
+      paymentAmount: 2500,
+      currency: 'MZN',
+      allocation: {
+        principal_payment: 1375,
+        interest_payment: 625,
+        fee_payment: 500,
+        balance_after: 23625,
+      },
+      idempotencyKey: 'idem_payment_failed_outbox',
+    });
+
+    await outbox.append(event);
+    await publisher.publishPending('tenant_001', 1);
+    await publisher.publishPending('tenant_001', 1);
+    await publisher.publishPending('tenant_001', 1);
+
+    await expect(outbox.list('tenant_001')).resolves.toEqual([
+      expect.objectContaining({
+        status: 'FAILED',
+        attempts: 3,
+      }),
+    ]);
+    await expect(outbox.claimPending('tenant_001', 1)).resolves.toEqual([]);
+
+    const recovered = await outbox.append(event);
+    expect(recovered).toMatchObject({
+      status: 'PENDING',
+      attempts: 0,
+    });
+    await expect(outbox.append(event)).resolves.toMatchObject({
+      status: 'PENDING',
+      attempts: 0,
+    });
+
+    await expect(publisher.publishPending('tenant_001', 1)).resolves.toMatchObject({
+      claimed: 1,
+      published: 1,
+      failed: 0,
+    });
+    await expect(outbox.list('tenant_001')).resolves.toEqual([
+      expect.objectContaining({ status: 'PUBLISHED' }),
+    ]);
+    delete process.env.FENGINE_OUTBOX_MAX_ATTEMPTS;
+    delete process.env.FENGINE_OUTBOX_BACKOFF_MS;
+  });
+
+  it('does not reset a published outbox row on append', async () => {
+    const outbox = new DomainOutboxService({ isConfigured: false } as any);
+    const event = new DomainEventFactory().loanDisbursed({
+      tenantId: 'tenant_001',
+      loan: approvedLoan(),
+      transactionId: 'disburse_loan_published',
+      currency: 'MZN',
+      idempotencyKey: 'idem_disburse_published',
+    });
+
+    await outbox.append(event);
+    const [claimed] = await outbox.claimPending('tenant_001', 1);
+    await outbox.markPublished(claimed);
+
+    await expect(outbox.append(event)).resolves.toMatchObject({
+      status: 'PUBLISHED',
+    });
+    await expect(outbox.claimPending('tenant_001', 1)).resolves.toEqual([]);
+  });
+
   it('does not let an expired outbox publisher complete a reclaimed record', async () => {
     const outbox = new DomainOutboxService({ isConfigured: false } as any);
     const event = new DomainEventFactory().loanDisbursed({

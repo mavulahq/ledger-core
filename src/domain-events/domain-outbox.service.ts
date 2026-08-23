@@ -30,7 +30,7 @@ export class DomainOutboxService {
         envelope.idempotency_key,
       );
       if (existing) {
-        return existing;
+        return this.recoverMemoryFailed(existing);
       }
       const now = new Date();
       const record: DomainOutboxRecord = {
@@ -47,7 +47,7 @@ export class DomainOutboxService {
     }
 
     return this.prisma.withTenant(envelope.tenant_id, async (tx) => {
-      const [row] = await tx.$queryRaw<any[]>`
+      const [inserted] = await tx.$queryRaw<any[]>`
         INSERT INTO "domain_outbox_events" (
           "eventId", "tenantId", "eventType", "eventVersion", "occurredAt",
           "aggregateType", "aggregateId", "aggregateVersion",
@@ -61,11 +61,13 @@ export class DomainOutboxService {
           CAST(${JSON.stringify(envelope.payload)} AS jsonb), CAST(${JSON.stringify(envelope.metadata)} AS jsonb),
           'PENDING', 0, ${maxAttempts}, now(), now()
         )
-        ON CONFLICT ("tenantId", "idempotencyKey") DO UPDATE SET
-          "updatedAt" = "domain_outbox_events"."updatedAt"
+        ON CONFLICT ("tenantId", "idempotencyKey") DO NOTHING
         RETURNING *
       `;
-      return this.fromRow(row);
+      if (inserted) {
+        return this.fromRow(inserted);
+      }
+      return this.recoverFailedOrLoad(tx, envelope);
     });
   }
 
@@ -93,6 +95,7 @@ export class DomainOutboxService {
       )
       ON CONFLICT ("tenantId", "idempotencyKey") DO NOTHING
     `;
+    await this.recoverFailedInTransaction(tx, envelope);
   }
 
   async list(tenantId: string): Promise<DomainOutboxRecord[]> {
@@ -268,6 +271,75 @@ export class DomainOutboxService {
       acc[row.status as DomainOutboxStatus] = Number(row.count);
       return acc;
     }, empty);
+  }
+
+  private recoverMemoryFailed(record: DomainOutboxRecord): DomainOutboxRecord {
+    if (record.status !== 'FAILED') {
+      return record;
+    }
+    const recovered: DomainOutboxRecord = {
+      ...record,
+      status: 'PENDING',
+      attempts: 0,
+      available_at: new Date(),
+      locked_until: undefined,
+      locked_by: undefined,
+      failed_at: undefined,
+      last_error: undefined,
+      updated_at: new Date(),
+    };
+    this.memory.set(record.envelope.event_id, recovered);
+    return recovered;
+  }
+
+  private async recoverFailedOrLoad(
+    tx: TenantTransaction,
+    envelope: DomainEventEnvelope,
+  ): Promise<DomainOutboxRecord> {
+    const recovered = await this.recoverFailedInTransaction(tx, envelope);
+    if (recovered) {
+      return recovered;
+    }
+    const existingRows = await tx.$queryRaw<any[]>`
+      SELECT * FROM "domain_outbox_events"
+      WHERE "tenantId" = ${envelope.tenant_id}
+        AND "idempotencyKey" = ${envelope.idempotency_key || null}
+      LIMIT 1
+    `;
+    const existing = Array.isArray(existingRows) ? existingRows[0] : undefined;
+    if (!existing) {
+      throw new Error(
+        `Outbox record not found after conflict for ${envelope.event_id}`,
+      );
+    }
+    return this.fromRow(existing);
+  }
+
+  private async recoverFailedInTransaction(
+    tx: TenantTransaction,
+    envelope: DomainEventEnvelope,
+  ): Promise<DomainOutboxRecord | undefined> {
+    if (!envelope.idempotency_key) {
+      return undefined;
+    }
+    const rows = await tx.$queryRaw<any[]>`
+      UPDATE "domain_outbox_events"
+      SET
+        "status" = 'PENDING',
+        "attempts" = 0,
+        "availableAt" = now(),
+        "lockedUntil" = NULL,
+        "lockedBy" = NULL,
+        "failedAt" = NULL,
+        "lastError" = NULL,
+        "updatedAt" = now()
+      WHERE "tenantId" = ${envelope.tenant_id}
+        AND "idempotencyKey" = ${envelope.idempotency_key}
+        AND "status" = 'FAILED'
+      RETURNING *
+    `;
+    const recovered = Array.isArray(rows) ? rows[0] : undefined;
+    return recovered ? this.fromRow(recovered) : undefined;
   }
 
   private findMemoryByIdempotencyKey(

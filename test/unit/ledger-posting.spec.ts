@@ -31,7 +31,8 @@ describe('ledger posting persistence', () => {
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([existingEntry])
         .mockResolvedValueOnce([{ currency: 'MZN' }])
-        .mockResolvedValueOnce([{ currency: 'MZN' }]),
+        .mockResolvedValueOnce([{ currency: 'MZN' }])
+        .mockResolvedValueOnce([]),
     };
     const prisma = {
       isConfigured: true,
@@ -81,6 +82,7 @@ describe('ledger posting persistence', () => {
     expect(auditTrail.record).not.toHaveBeenCalled();
     expect(queriedSql).toContain('INSERT INTO "journal_entries"');
     expect(executedSql).toContain('INSERT INTO "domain_outbox_events"');
+    expect(queriedSql).toContain('AND "status" = \'FAILED\'');
     expect(executedSql).not.toContain('UPDATE "ledger_accounts"');
   });
 });

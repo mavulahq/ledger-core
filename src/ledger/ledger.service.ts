@@ -12,10 +12,7 @@ import { DomainEventFactory } from '../domain-events/domain-event-factory.servic
 import { DomainOutboxService } from '../domain-events/domain-outbox.service';
 import type { AccountPostingInput, TenantTransaction } from '../accounts/account.types';
 import { AccountsService } from '../services/accounts.service';
-import {
-  DomainEventEnvelope,
-  LedgerJournalPostedPayload,
-} from '../domain-events/domain-event.types';
+import { LedgerJournalPostedPayload } from '../domain-events/domain-event.types';
 
 // Chart of Accounts - International standard structure
 export enum AccountClass {
@@ -451,7 +448,7 @@ export class LedgerService {
         if (existingEntry.status !== 'POSTED') {
           throw new Error(`Journal entry ${entry.entry_id} already exists with status ${existingEntry.status}`);
         }
-        await this.appendOutboxInTransaction(
+        await this.outbox.appendInTransaction(
           tx,
           this.domainEvents.ledgerJournalPosted({
             tenantId,
@@ -494,7 +491,7 @@ export class LedgerService {
         );
       }
 
-      await this.appendOutboxInTransaction(
+      await this.outbox.appendInTransaction(
         tx,
         this.domainEvents.ledgerJournalPosted({ tenantId, entry, lines }),
       );
@@ -577,27 +574,6 @@ export class LedgerService {
       debit: (line.debit_amount || 0).toFixed(2),
       credit: (line.credit_amount || 0).toFixed(2),
     };
-  }
-
-  private async appendOutboxInTransaction(tx: any, event: DomainEventEnvelope): Promise<void> {
-    const maxAttempts = Number(process.env.FENGINE_OUTBOX_MAX_ATTEMPTS || 3);
-    await tx.$executeRaw`
-      INSERT INTO "domain_outbox_events" (
-        "eventId", "tenantId", "eventType", "eventVersion", "occurredAt",
-        "aggregateType", "aggregateId", "aggregateVersion",
-        "correlationId", "causationId", "idempotencyKey",
-        "payload", "metadata", "status", "attempts", "maxAttempts", "availableAt", "updatedAt"
-      )
-      VALUES (
-        ${event.event_id}, ${event.tenant_id}, ${event.event_type}, ${event.event_version}, ${new Date(event.occurred_at)},
-        ${event.aggregate.type}, ${event.aggregate.id}, ${event.aggregate.version},
-        ${event.correlation_id}, ${event.causation_id}, ${event.idempotency_key || null},
-        CAST(${this.json(event.payload)} AS jsonb), CAST(${this.json(event.metadata)} AS jsonb),
-        'PENDING', 0, ${maxAttempts}, now(), now()
-      )
-      ON CONFLICT ("tenantId", "idempotencyKey") DO UPDATE SET
-        "updatedAt" = "domain_outbox_events"."updatedAt"
-    `;
   }
 
   private journalPostedAudit(tenantId: string, entry: JournalEntry) {
