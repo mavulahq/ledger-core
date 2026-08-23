@@ -172,8 +172,9 @@ export function allocatePayment(params: {
   const interest_payment = Decimal.min(remaining, params.interest_due).toDecimalPlaces(2);
   remaining = remaining.minus(interest_payment);
 
-  // Finally, pay principal
-  const principal_payment = Decimal.min(remaining, params.principal_due).toDecimalPlaces(2);
+  // Finally, pay principal up to the outstanding balance
+  const principalCap = Decimal.max(new Decimal(params.current_balance || 0), 0);
+  const principal_payment = Decimal.min(remaining, principalCap).toDecimalPlaces(2);
 
   return {
     principal_payment: principal_payment.toNumber(),

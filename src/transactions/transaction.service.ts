@@ -5,6 +5,7 @@
  */
 
 import { Injectable } from '@nestjs/common';
+import Decimal from 'decimal.js';
 import { PrismaService } from '../services/prisma.service';
 import { LedgerService } from '../ledger/ledger.service';
 import { RulesEngineService } from '../rules-engine/rules-engine.service';
@@ -147,6 +148,12 @@ export class TransactionService {
         fees_due: params.feesDue,
         current_balance: params.currentBalance,
       });
+      const allocatedTotal = new Decimal(allocation.principal_payment)
+        .plus(allocation.interest_payment)
+        .plus(allocation.fee_payment);
+      if (!allocatedTotal.eq(new Decimal(params.paymentAmount).toDecimalPlaces(2))) {
+        return this.failedResult(txnId, 'Payment exceeds the remaining allocatable loan balance');
+      }
 
       // Step 5: Record in General Ledger
       await this.ledger.recordPaymentTransaction({

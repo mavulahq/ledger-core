@@ -647,6 +647,67 @@ describe('Financial engine loan lifecycle integration', () => {
     expect(repairedEvent?.envelope.aggregate.version).toBe(repairedLoan?.version);
   });
 
+  it('rejects a scheduled payment that would credit more principal than remaining balance', async () => {
+    const loan = await loanService.applyForLoan(tenantId, {
+      customer_id: customerId,
+      product_id: productId,
+      loan_type: LoanType.PERSONAL,
+      requested_amount: 25000,
+      requested_term_months: 12,
+      purpose: 'Final payment over-credit guard',
+      metadata: {},
+    });
+
+    await loanService.approveLoan(tenantId, loan, {
+      credit_score: 650,
+      income: 120000,
+      employment_years: 5,
+    });
+    await ledgerService.initializeChartOfAccounts(tenantId);
+    await loanService.disburseLoan(tenantId, loan, {
+      idempotencyKey: `idem_disburse_final_${loan.id}`,
+    });
+
+    loan.remaining_balance = 100;
+    loan.total_paid_fees = loan.origination_fee_amount;
+    const transactionsBefore = await transactionService.listTransactions(tenantId);
+
+    await expect(
+      loanService.processLoanPayment(tenantId, loan, loan.monthly_payment, {
+        idempotencyKey: `idem_payment_oversize_${loan.id}`,
+      }),
+    ).rejects.toThrow('Payment exceeds the remaining allocatable loan balance');
+
+    expect(loan.remaining_balance).toBe(100);
+    expect(await transactionService.listTransactions(tenantId)).toHaveLength(transactionsBefore.length);
+
+    const schedule = loanService.generateAmortizationSchedule(loan);
+    const nextInstallment =
+      schedule.find((item) => item.closing_balance < loan.remaining_balance + 0.0001) || schedule[0];
+    const closingPayment = Number((loan.remaining_balance + nextInstallment.interest).toFixed(2));
+    const closed = await loanService.processLoanPayment(tenantId, loan, closingPayment, {
+      idempotencyKey: `idem_payment_close_${loan.id}`,
+    });
+
+    expect(closed.success).toBe(true);
+    expect(closed.principal_paid).toBe(100);
+    expect(closed.balance_remaining).toBe(0);
+    expect(loan.status).toBe(LoanStatus.PAID_UP);
+
+    const posted = (await transactionService.listTransactions(tenantId)).find(
+      (transaction) => transaction.idempotency_key === `idem_payment_close_${loan.id}`,
+    );
+    expect(posted?.principal_payment).toBe(100);
+    const journal = (await ledgerService.listEntries(tenantId)).find(
+      (entry) => entry.transaction_id === posted?.id,
+    );
+    expect(journal?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ account_code: '11100', credit_amount: 100 }),
+      ]),
+    );
+  });
+
 });
 
 function projectionLoan(productId: string): Loan {
