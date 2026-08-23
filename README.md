@@ -8,7 +8,7 @@ Legacy alias: `fengine`.
 
 - Tenant products, accounts, loans, rules, schemas and workflows.
 - Idempotent financial transactions and double-entry ledger posting.
-- PostgreSQL persistence, Redis job publishing, audit trails, health and metrics.
+- PostgreSQL persistence, authenticated Redis job publishing (HMAC + Redis AUTH/TLS), audit trails, health and metrics.
 - Transactional Outbox/Inbox and read projections for active domain events.
 - Controlled account lifecycle with maker-checker approval and an immutable,
   journal-backed customer-account subledger.

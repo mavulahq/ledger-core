@@ -6,6 +6,7 @@ import { JournalEntry } from '../../src/ledger/ledger.service';
 import { Loan, LoanStatus, LoanType } from '../../src/loans/loan.service';
 import { ProductSchema, ProductType } from '../../src/products/product-config.service';
 import { EngineEventService } from '../../src/worker/engine-event.service';
+import { assertWorkerJobAuthenticated } from '../../src/worker/job-auth';
 import { WorkerQueueService } from '../../src/worker/worker-queue.service';
 
 describe('ledger-core worker communication', () => {
@@ -33,8 +34,24 @@ describe('ledger-core worker communication', () => {
       payload: { loan_id: 'loan_001', event_type: 'LOAN_APPROVED' },
     });
     expect(first.id).toBe(jobId('tenant_001', 'loan-approved-001'));
+    expect(first.auth).toMatchObject({ alg: 'HS256', signature: expect.stringMatching(/^[a-f0-9]{64}$/) });
     await expect(queue.get('tenant_001', first.id)).resolves.toEqual(first);
     await expect(queue.get('tenant_002', first.id)).resolves.toBeNull();
+  });
+
+  it('binds engine job signatures to tenant and payload', async () => {
+    const queue = new WorkerQueueService();
+    const job = await queue.enqueue({
+      tenant_id: 'tenant_001',
+      event_type: 'LOAN_APPROVED',
+      payload: { loan_id: 'loan_signed_001' },
+      idempotency_key: 'loan-signed-001',
+    });
+
+    expect(() => assertWorkerJobAuthenticated(job)).not.toThrow();
+    expect(() => assertWorkerJobAuthenticated({ ...job, tenant_id: 'tenant_002' })).toThrow(
+      'worker job signature is invalid',
+    );
   });
 
   it('publishes canonical domain events through the Outbox publisher', async () => {

@@ -2,6 +2,11 @@ import type { DomainEventEnvelope } from '../domain-events/domain-event.types';
 
 export type WorkerJobStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
 
+export interface WorkerJobAuth {
+  alg: 'HS256';
+  signature: string;
+}
+
 export interface EnqueueEngineEventInput {
   tenant_id: string;
   event_type: string;
@@ -23,6 +28,7 @@ export interface EngineWorkerJob {
   updated_at: string;
   result?: any;
   last_error?: string;
+  auth?: WorkerJobAuth;
 }
 
 export interface EngineEventCallback {

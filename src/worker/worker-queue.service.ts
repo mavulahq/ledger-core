@@ -2,6 +2,7 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { createHash, randomUUID } from 'crypto';
 import { Job, JobsOptions, Queue } from 'bullmq';
 import { DomainEventEnvelope } from '../domain-events/domain-event.types';
+import { signWorkerJob } from './job-auth';
 import { EngineWorkerJob, EnqueueEngineEventInput } from './worker.types';
 
 @Injectable()
@@ -30,6 +31,7 @@ export class WorkerQueueService implements OnModuleDestroy {
       created_at: now,
       updated_at: now,
     };
+    job.auth = signWorkerJob(job);
 
     if (!this.queue) {
       this.memory.set(id, job);
@@ -87,12 +89,26 @@ export class WorkerQueueService implements OnModuleDestroy {
 
   private redisConnection() {
     const parsed = new URL(process.env.REDIS_URL || 'redis://localhost:16379');
+    const password = decodeOptional(parsed.password) || process.env.REDIS_PASSWORD || undefined;
+    const useTls = parsed.protocol === 'rediss:' || process.env.REDIS_TLS === 'true';
+    if (!this.usesMemory() && !password) {
+      throw new Error('REDIS_URL must include a password or REDIS_PASSWORD must be set');
+    }
+    if (process.env.NODE_ENV === 'production' && !useTls) {
+      throw new Error('REDIS_URL must use rediss:// (TLS) in production');
+    }
     return {
       host: parsed.hostname || 'localhost',
       port: Number(parsed.port || 6379),
-      password: parsed.password || undefined,
+      username: decodeOptional(parsed.username) || undefined,
+      password,
       db: parsed.pathname ? Number(parsed.pathname.slice(1) || 0) : 0,
       maxRetriesPerRequest: null,
+      tls: useTls
+        ? {
+            rejectUnauthorized: process.env.REDIS_TLS_REJECT_UNAUTHORIZED !== 'false',
+          }
+        : undefined,
     };
   }
 
@@ -126,5 +142,16 @@ export class WorkerQueueService implements OnModuleDestroy {
     if (state === 'active') return 'PROCESSING';
     if (state === 'failed') return 'FAILED';
     return 'QUEUED';
+  }
+}
+
+function decodeOptional(value: string): string {
+  if (!value) {
+    return '';
+  }
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
   }
 }

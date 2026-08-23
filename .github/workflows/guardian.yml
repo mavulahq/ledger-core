@@ -39,7 +39,9 @@ jobs:
       DATABASE_URL: postgresql://mavula:mavula_dev@127.0.0.1:5432/mavula?schema=public
       LEDGER_CORE_MIGRATION_DATABASE_URL: postgresql://mavula:mavula_dev@127.0.0.1:5432/mavula?schema=public
       LEDGER_CORE_DATABASE_ROLE_PASSWORD: mavula_ledger_ci_password
-      REDIS_URL: redis://127.0.0.1:6379
+      REDIS_URL: redis://:compose-validation-placeholder@127.0.0.1:6379
+      REDIS_PASSWORD: compose-validation-placeholder
+      JOB_SIGNING_SECRET: compose-validation-placeholder
       OIDC_ISSUER: https://identity.example.test
       OIDC_AUTHORIZATION_ENDPOINT: https://identity.example.test/auth
       OIDC_AUDIENCE: urn:mavula:ledger-core
