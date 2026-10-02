@@ -216,6 +216,51 @@ export class FengineStoreService {
     });
   }
 
+  async pageRegulatoryTransactions(input: {
+    tenantId: string;
+    periodFrom: Date;
+    periodTo: Date;
+    cursor?: { postedAt: Date; id: string };
+    limit: number;
+  }): Promise<Transaction[]> {
+    if (!this.prisma.isConfigured) {
+      return [...(this.transactions.get(input.tenantId)?.values() || [])]
+        .filter((transaction) => transaction.status === 'POSTED' && transaction.posted_at)
+        .filter((transaction) => {
+          const postedAt = new Date(transaction.posted_at!);
+          return postedAt >= input.periodFrom && postedAt <= input.periodTo;
+        })
+        .filter((transaction) => {
+          if (!input.cursor) return true;
+          const postedAt = new Date(transaction.posted_at!);
+          return postedAt > input.cursor.postedAt
+            || (postedAt.valueOf() === input.cursor.postedAt.valueOf() && transaction.id > input.cursor.id);
+        })
+        .sort((left, right) => {
+          const timestamp = new Date(left.posted_at!).valueOf() - new Date(right.posted_at!).valueOf();
+          return timestamp || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+        })
+        .slice(0, input.limit);
+    }
+    return this.prisma.withTenant(input.tenantId, async (tx) => {
+      const rows = input.cursor
+        ? await tx.$queryRaw<any[]>`
+            SELECT data FROM "financial_transactions"
+            WHERE "tenantId" = ${input.tenantId} AND status = 'POSTED'
+              AND "postedAt" BETWEEN ${input.periodFrom} AND ${input.periodTo}
+              AND ("postedAt", id) > (${input.cursor.postedAt}, ${input.cursor.id})
+            ORDER BY "postedAt" ASC, id ASC LIMIT ${input.limit}
+          `
+        : await tx.$queryRaw<any[]>`
+            SELECT data FROM "financial_transactions"
+            WHERE "tenantId" = ${input.tenantId} AND status = 'POSTED'
+              AND "postedAt" BETWEEN ${input.periodFrom} AND ${input.periodTo}
+            ORDER BY "postedAt" ASC, id ASC LIMIT ${input.limit}
+          `;
+      return rows.map((row) => this.fromJson<Transaction>(row.data));
+    });
+  }
+
   async getTransaction(tenantId: string, transactionId: string): Promise<Transaction | undefined> {
     if (!this.prisma.isConfigured) {
       return this.transactions.get(tenantId)?.get(transactionId);

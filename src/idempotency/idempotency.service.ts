@@ -10,6 +10,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto';
 import { MetricsService } from '../metrics/metrics.service';
 import { PrismaService } from '../services/prisma.service';
+import { CommittedBusinessConflictException } from './committed-business-conflict.exception';
 
 export interface IdempotentRequestContext {
   tenantId: string;
@@ -124,7 +125,15 @@ export class IdempotencyService implements OnModuleInit, OnModuleDestroy {
           )
         `;
 
-        const body = await operation();
+        let body: T;
+        try {
+          body = await operation();
+        } catch (error) {
+          if (error instanceof CommittedBusinessConflictException) {
+            return { committedError: error } as const;
+          }
+          throw error;
+        }
         const httpStatus = status();
         if (httpStatus < 200 || httpStatus > 299) {
           throw new Error(`Idempotent operations must complete with a 2xx status, received ${httpStatus}`);
@@ -141,8 +150,12 @@ export class IdempotencyService implements OnModuleInit, OnModuleDestroy {
             CAST(${JSON.stringify(body ?? null)} AS jsonb), ${completedAt}, ${expiresAt}
           )
         `;
-        return { body, status: httpStatus, replayed: false };
+        return { body, status: httpStatus, replayed: false } as const;
       });
+      if ('committedError' in result) {
+        this.metrics.recordIdempotency(context.operation, 'conflict');
+        throw result.committedError;
+      }
       if (!result.replayed) this.metrics.recordIdempotency(context.operation, 'created');
       return result;
     } catch (error) {
