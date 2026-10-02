@@ -9,7 +9,7 @@
   "scripts": {
     "prebuild": "prisma generate",
     "build": "tsc -p tsconfig.json",
-    "guardian:check": "node scripts/guardian.mjs",
+    "guardian:check": "node scripts/guardian.mjs && node --test scripts/check-agent-policy.test.mjs",
     "openapi:check": "node scripts/check-openapi.mjs",
     "start": "node dist/main.js",
     "start:dev": "ts-node-dev --respawn --transpile-only src/main.ts",

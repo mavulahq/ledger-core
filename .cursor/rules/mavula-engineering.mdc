@@ -1,0 +1,12 @@
+---
+description: MAVULA regulated cloud-banking engineering and review guardrails
+alwaysApply: true
+---
+
+Use `.agents/skills/mavula-cloud-banking/SKILL.md` for MAVULA architecture,
+implementation, operations, security, scalability, composability, and no-code
+configuration work.
+
+Use `.agents/skills/mavula-review/SKILL.md` for reviews. Production-impact
+reviews must apply both skills. Lead with actionable findings ordered by
+severity and use the language of the pull request, issue, or discussion.
