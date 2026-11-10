@@ -25,7 +25,6 @@ import { AccountsService } from '../services/accounts.service';
 import { AuditTrailService } from '../services/audit-trail.service';
 import { FengineStoreService } from '../services/fengine-store.service';
 import { PrismaService } from '../services/prisma.service';
-import { CommittedBusinessConflictException } from '../idempotency/committed-business-conflict.exception';
 import {
   CreateFinancialAdjustmentInput,
   FinancialAdjustmentCorrection,
