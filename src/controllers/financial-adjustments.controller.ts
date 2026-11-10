@@ -149,24 +149,36 @@ export class FinancialAdjustmentsController {
     if (!correction) return undefined;
     return {
       lending: correction.lending ? {
-        amount: correction.lending.amount,
+        amount: this.publicMoney(correction.lending.amount),
         currency: correction.lending.currency,
-        allocation: correction.lending.allocation,
+        allocation: correction.lending.allocation ? {
+          principal: this.publicMoney(correction.lending.allocation.principal),
+          interest: this.publicMoney(correction.lending.allocation.interest),
+          fees: this.publicMoney(correction.lending.allocation.fees),
+        } : undefined,
       } : undefined,
       journal: correction.journal ? {
         ledger_lines: correction.journal.ledgerLines.map((line) => ({
           account_code: line.account_code,
-          debit_amount: line.debit_amount,
-          credit_amount: line.credit_amount,
+          debit_amount: this.publicMoney(line.debit_amount),
+          credit_amount: this.publicMoney(line.credit_amount),
         })),
         account_postings: correction.journal.accountPostings?.map((posting) => ({
           account_id: posting.accountId,
           direction: posting.direction,
-          amount: posting.amount,
+          amount: this.publicMoney(posting.amount),
           currency: posting.currency,
           reference: posting.reference,
         })),
       } : undefined,
     };
+  }
+
+  private publicMoney(value: string | number | undefined): string | undefined {
+    if (value === undefined || value === null) return undefined;
+    const normalized = typeof value === 'number' ? value.toString() : value;
+    const numeric = Number(normalized);
+    if (!Number.isFinite(numeric)) return undefined;
+    return numeric.toFixed(2);
   }
 }
