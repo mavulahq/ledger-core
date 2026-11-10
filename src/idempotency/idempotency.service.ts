@@ -130,7 +130,21 @@ export class IdempotencyService implements OnModuleInit, OnModuleDestroy {
           body = await operation();
         } catch (error) {
           if (error instanceof CommittedBusinessConflictException) {
-            return { committedError: error } as const;
+            const httpStatus = error.getStatus();
+            const responseBody = error.getResponse();
+            const completedAt = new Date();
+            const expiresAt = new Date(completedAt.getTime() + this.retentionDays * 86_400_000);
+            await tx.$executeRaw`
+              INSERT INTO "idempotency_receipts" (
+                id, "tenantId", operation, "keyDigest", "requestHash", "actorId",
+                "correlationId", "httpStatus", "responseBody", "completedAt", "expiresAt"
+              ) VALUES (
+                ${`idem_${randomUUID()}`}, ${context.tenantId}, ${context.operation}, ${keyDigest}, ${requestHash},
+                ${context.actorId}, ${context.correlationId || null}, ${httpStatus},
+                CAST(${JSON.stringify(responseBody ?? null)} AS jsonb), ${completedAt}, ${expiresAt}
+              )
+            `;
+            return { body: responseBody as T, status: httpStatus, replayed: false } as const;
           }
           throw error;
         }
@@ -152,11 +166,11 @@ export class IdempotencyService implements OnModuleInit, OnModuleDestroy {
         `;
         return { body, status: httpStatus, replayed: false } as const;
       });
-      if ('committedError' in result) {
+      if (!result.replayed && result.status >= 400) {
         this.metrics.recordIdempotency(context.operation, 'conflict');
-        throw result.committedError;
+      } else if (!result.replayed) {
+        this.metrics.recordIdempotency(context.operation, 'created');
       }
-      if (!result.replayed) this.metrics.recordIdempotency(context.operation, 'created');
       return result;
     } catch (error) {
       if (error instanceof BadRequestException || error instanceof ConflictException || error instanceof ServiceUnavailableException) {
