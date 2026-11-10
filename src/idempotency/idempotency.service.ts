@@ -129,9 +129,10 @@ export class IdempotencyService implements OnModuleInit, OnModuleDestroy {
         try {
           body = await operation();
         } catch (error) {
-          if (error instanceof CommittedBusinessConflictException) {
-            const httpStatus = error.getStatus();
-            const responseBody = error.getResponse();
+          if (this.isCommittedBusinessConflict(error, context.operation)) {
+            const conflict = error as ConflictException;
+            const httpStatus = conflict.getStatus();
+            const responseBody = conflict.getResponse();
             const completedAt = new Date();
             const expiresAt = new Date(completedAt.getTime() + this.retentionDays * 86_400_000);
             await tx.$executeRaw`
@@ -179,6 +180,18 @@ export class IdempotencyService implements OnModuleInit, OnModuleDestroy {
       this.metrics.recordIdempotency(context.operation, 'failed');
       throw error;
     }
+  }
+
+  private isCommittedBusinessConflict(error: unknown, operation: string): boolean {
+    if (error instanceof CommittedBusinessConflictException) return true;
+    if (operation !== 'financial-adjustments.approve' || !(error instanceof ConflictException)) return false;
+    const committedMessages = new Set([
+      'Loan state changed after the adjustment request',
+      'Loan has later financial effects; adjust the latest transaction first',
+      'Financial adjustment references an unavailable account',
+      'Closed accounts cannot receive financial adjustments',
+    ]);
+    return committedMessages.has(error.message);
   }
 
   private requireKey(value: unknown): string {
