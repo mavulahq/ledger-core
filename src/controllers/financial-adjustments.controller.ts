@@ -125,7 +125,7 @@ export class FinancialAdjustmentsController {
       adjustment_type: request.adjustmentType,
       status: request.status,
       reason: request.reason,
-      correction: request.correction,
+      correction: this.publicCorrection(request),
       target_transaction_id: request.targetTransactionId,
       target_journal_entry_id: request.targetJournalEntryId,
       target_loan_id: request.targetLoanId,
@@ -142,5 +142,43 @@ export class FinancialAdjustmentsController {
       decided_at: request.decidedAt?.toISOString(),
       applied_at: request.appliedAt?.toISOString(),
     };
+  }
+
+  private publicCorrection(request: FinancialAdjustmentRecord) {
+    const correction = request.correction;
+    if (!correction) return undefined;
+    return {
+      lending: correction.lending ? {
+        amount: this.publicMoney(correction.lending.amount),
+        currency: correction.lending.currency,
+        allocation: correction.lending.allocation ? {
+          principal: this.publicMoney(correction.lending.allocation.principal),
+          interest: this.publicMoney(correction.lending.allocation.interest),
+          fees: this.publicMoney(correction.lending.allocation.fees),
+        } : undefined,
+      } : undefined,
+      journal: correction.journal ? {
+        ledger_lines: correction.journal.ledgerLines.map((line) => ({
+          account_code: line.account_code,
+          debit_amount: this.publicMoney(line.debit_amount),
+          credit_amount: this.publicMoney(line.credit_amount),
+        })),
+        account_postings: correction.journal.accountPostings?.map((posting) => ({
+          account_id: posting.accountId,
+          direction: posting.direction,
+          amount: this.publicMoney(posting.amount),
+          currency: posting.currency,
+          reference: posting.reference,
+        })),
+      } : undefined,
+    };
+  }
+
+  private publicMoney(value: string | number | undefined): string | undefined {
+    if (value === undefined || value === null) return undefined;
+    const normalized = typeof value === 'number' ? value.toString() : value;
+    const numeric = Number(normalized);
+    if (!Number.isFinite(numeric)) return undefined;
+    return numeric.toFixed(2);
   }
 }

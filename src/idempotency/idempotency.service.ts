@@ -10,6 +10,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto';
 import { MetricsService } from '../metrics/metrics.service';
 import { PrismaService } from '../services/prisma.service';
+import { CommittedBusinessConflictException } from './committed-business-conflict.exception';
 
 export interface IdempotentRequestContext {
   tenantId: string;
@@ -124,7 +125,30 @@ export class IdempotencyService implements OnModuleInit, OnModuleDestroy {
           )
         `;
 
-        const body = await operation();
+        let body: T;
+        try {
+          body = await operation();
+        } catch (error) {
+          if (this.isCommittedBusinessConflict(error, context.operation)) {
+            const conflict = error as ConflictException;
+            const httpStatus = conflict.getStatus();
+            const responseBody = conflict.getResponse();
+            const completedAt = new Date();
+            const expiresAt = new Date(completedAt.getTime() + this.retentionDays * 86_400_000);
+            await tx.$executeRaw`
+              INSERT INTO "idempotency_receipts" (
+                id, "tenantId", operation, "keyDigest", "requestHash", "actorId",
+                "correlationId", "httpStatus", "responseBody", "completedAt", "expiresAt"
+              ) VALUES (
+                ${`idem_${randomUUID()}`}, ${context.tenantId}, ${context.operation}, ${keyDigest}, ${requestHash},
+                ${context.actorId}, ${context.correlationId || null}, ${httpStatus},
+                CAST(${JSON.stringify(responseBody ?? null)} AS jsonb), ${completedAt}, ${expiresAt}
+              )
+            `;
+            return { body: responseBody as T, status: httpStatus, replayed: false } as const;
+          }
+          throw error;
+        }
         const httpStatus = status();
         if (httpStatus < 200 || httpStatus > 299) {
           throw new Error(`Idempotent operations must complete with a 2xx status, received ${httpStatus}`);
@@ -141,9 +165,13 @@ export class IdempotencyService implements OnModuleInit, OnModuleDestroy {
             CAST(${JSON.stringify(body ?? null)} AS jsonb), ${completedAt}, ${expiresAt}
           )
         `;
-        return { body, status: httpStatus, replayed: false };
+        return { body, status: httpStatus, replayed: false } as const;
       });
-      if (!result.replayed) this.metrics.recordIdempotency(context.operation, 'created');
+      if (!result.replayed && result.status >= 400) {
+        this.metrics.recordIdempotency(context.operation, 'conflict');
+      } else if (!result.replayed) {
+        this.metrics.recordIdempotency(context.operation, 'created');
+      }
       return result;
     } catch (error) {
       if (error instanceof BadRequestException || error instanceof ConflictException || error instanceof ServiceUnavailableException) {
@@ -152,6 +180,18 @@ export class IdempotencyService implements OnModuleInit, OnModuleDestroy {
       this.metrics.recordIdempotency(context.operation, 'failed');
       throw error;
     }
+  }
+
+  private isCommittedBusinessConflict(error: unknown, operation: string): boolean {
+    if (error instanceof CommittedBusinessConflictException) return true;
+    if (operation !== 'financial-adjustments.approve' || !(error instanceof ConflictException)) return false;
+    const committedMessages = new Set([
+      'Loan state changed after the adjustment request',
+      'Loan has later financial effects; adjust the latest transaction first',
+      'Financial adjustment references an unavailable account',
+      'Closed accounts cannot receive financial adjustments',
+    ]);
+    return committedMessages.has(error.message);
   }
 
   private requireKey(value: unknown): string {

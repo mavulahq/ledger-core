@@ -56,7 +56,8 @@ export class RejectAccountLifecycleV1Dto {
   @IsString() @IsNotEmpty() @MaxLength(500) reason!: string;
 }
 
-const POSITIVE_DECIMAL_PATTERN = /^([1-9][0-9]*(\.[0-9]{1,2})?|0\.0*[1-9][0-9]?)$/;
+const POSITIVE_DECIMAL_PATTERN = /^(?:[1-9][0-9]*(?:\.[0-9]{1,2})?|0\.(?:0[1-9]|[1-9][0-9]?))$/;
+const NON_NEGATIVE_DECIMAL_PATTERN = /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?$/;
 
 export class FinancialAdjustmentMoneyV1Dto {
   @IsString() @Matches(POSITIVE_DECIMAL_PATTERN) amount!: string;
@@ -76,8 +77,8 @@ export class LendingCorrectionV1Dto extends FinancialAdjustmentMoneyV1Dto {
 
 export class CorrectionLedgerLineV1Dto {
   @IsString() @IsNotEmpty() @MaxLength(64) account_code!: string;
-  @IsOptional() @IsString() @Matches(POSITIVE_DECIMAL_PATTERN) debit_amount?: string;
-  @IsOptional() @IsString() @Matches(POSITIVE_DECIMAL_PATTERN) credit_amount?: string;
+  @IsOptional() @IsString() @Matches(NON_NEGATIVE_DECIMAL_PATTERN) debit_amount?: string;
+  @IsOptional() @IsString() @Matches(NON_NEGATIVE_DECIMAL_PATTERN) credit_amount?: string;
   @ValidateIf((line) => !line.debit_amount && !line.credit_amount)
   @IsNotEmpty({ message: 'debit_amount or credit_amount is required' })
   amount_side?: never;

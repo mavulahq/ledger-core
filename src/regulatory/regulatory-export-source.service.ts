@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { createHash } from 'node:crypto';
 import { FengineStoreService } from '../services/fengine-store.service';
-import { TransactionStatus, type Transaction } from '../transactions/transaction.service';
+import type { Transaction } from '../transactions/transaction.service';
 
 const MAX_PAGE_SIZE = 500;
 const TWO_DECIMAL_CURRENCIES = new Set(['MZN', 'USD', 'EUR', 'GBP', 'ZAR']);
@@ -59,17 +59,19 @@ export class RegulatoryExportSourceService {
     const periodFrom = startOfUtcDay(input.period_from);
     const periodTo = endOfUtcDay(input.period_to);
     if (periodFrom > periodTo) throw new Error('period_from must not be after period_to');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.retention_until)) throw new Error('retention_until must be an ISO date');
+    startOfUtcDay(input.retention_until);
     required(input.legal_basis_code, 'legal_basis_code');
     const limit = input.limit ?? MAX_PAGE_SIZE;
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE) throw new Error('limit must be between 1 and 500');
 
     const cursor = input.cursor ? decodeCursor(input.cursor) : undefined;
-    const transactions = (await this.store.listTransactions(input.tenant_id))
-      .filter((transaction) => transaction.status === TransactionStatus.POSTED && postedAt(transaction))
-      .filter((transaction) => postedAt(transaction)! >= periodFrom && postedAt(transaction)! <= periodTo)
-      .sort(compareTransactions)
-      .filter((transaction) => !cursor || compareKey(transaction, cursor) > 0);
+    const transactions = await this.store.pageRegulatoryTransactions({
+      tenantId: input.tenant_id,
+      periodFrom,
+      periodTo,
+      cursor: cursor ? { postedAt: new Date(cursor.postedAt), id: cursor.id } : undefined,
+      limit: limit + 1,
+    });
     const selected = transactions.slice(0, limit);
     const records: RegulatoryTransactionRecord[] = [];
     const rejections: RegulatorySourceRejection[] = [];
@@ -83,7 +85,7 @@ export class RegulatoryExportSourceService {
       records,
       rejections: rejections.sort((left, right) => left.transaction_id.localeCompare(right.transaction_id)
         || left.field.localeCompare(right.field) || left.code.localeCompare(right.code)),
-      next_cursor: transactions.length > selected.length && last ? encodeCursor(last) : undefined,
+      next_cursor: transactions.length > limit && last ? encodeCursor(last) : undefined,
     };
   }
 
@@ -162,13 +164,11 @@ export class RegulatoryExportSourceService {
 
 function startOfUtcDay(value: string): Date {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('period dates must use YYYY-MM-DD');
-  return new Date(`${value}T00:00:00.000Z`);
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.valueOf()) || date.toISOString().slice(0, 10) !== value) throw new Error('period dates must be valid calendar dates');
+  return date;
 }
 function endOfUtcDay(value: string): Date { const date = startOfUtcDay(value); date.setUTCDate(date.getUTCDate() + 1); return new Date(date.valueOf() - 1); }
-function compareTransactions(left: Transaction, right: Transaction): number { return compareKey(left, { postedAt: postedAt(right)!.toISOString(), id: right.id }); }
-function compareKey(transaction: Transaction, key: { postedAt: string; id: string }): number {
-  return postedAt(transaction)!.toISOString().localeCompare(key.postedAt) || transaction.id.localeCompare(key.id);
-}
 function encodeCursor(transaction: Transaction): string { return Buffer.from(JSON.stringify({ postedAt: postedAt(transaction)!.toISOString(), id: transaction.id })).toString('base64url'); }
 function decodeCursor(value: string): { postedAt: string; id: string } {
   try {

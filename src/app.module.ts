@@ -45,6 +45,7 @@ import { IdempotencyService } from './idempotency/idempotency.service';
 import { IdempotencyInterceptor } from './idempotency/idempotency.interceptor';
 import { HttpMetricsInterceptor } from './metrics/http-metrics.interceptor';
 import { RegulatoryExportSourceService } from './regulatory/regulatory-export-source.service';
+import { MetricsTokenGuard } from './auth/metrics-token.guard';
 
 @Module({
   imports: [AuthModule],
@@ -84,6 +85,7 @@ import { RegulatoryExportSourceService } from './regulatory/regulatory-export-so
     DomainOutboxPublisherService,
     RegulatoryExportSourceService,
     IdempotencyService,
+    MetricsTokenGuard,
     { provide: APP_GUARD, useClass: AccessTokenGuard },
     { provide: APP_GUARD, useClass: TenantBoundaryGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },

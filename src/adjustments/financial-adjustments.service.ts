@@ -798,6 +798,7 @@ export class FinancialAdjustmentsService {
     } else {
       journal = await this.store.getJournalEntry(tenantId, targetId);
       if (!journal) throw new NotFoundException(`Journal entry not found: ${targetId}`);
+      transaction = await this.store.getTransaction(tenantId, journal.transaction_id);
     }
     const loan = transaction?.loan_id ? await this.store.getLoan(tenantId, transaction.loan_id) : undefined;
     return {
@@ -837,6 +838,11 @@ export class FinancialAdjustmentsService {
         FOR UPDATE
       `;
       if (!journalRow) throw new NotFoundException(`Journal entry not found: ${targetId}`);
+      [transactionRow] = await tx.$queryRaw<any[]>`
+        SELECT * FROM "financial_transactions"
+        WHERE "tenantId" = ${tenantId} AND id = ${journalRow.transactionId}
+        FOR UPDATE
+      `;
     }
     const transaction = transactionRow ? this.transactionFromRow(transactionRow) : undefined;
     let loan: Loan | undefined;
@@ -930,14 +936,17 @@ export class FinancialAdjustmentsService {
     request: FinancialAdjustmentRecord,
     target: ResolvedTarget,
   ): Promise<string | undefined> {
-    if (target.loan && request.expectedLoanVersion !== Number(target.loan.version)) {
+    if (target.loan && request.expectedLoanVersion !== undefined && request.expectedLoanVersion !== Number(target.loan.version)) {
       return 'Loan state changed after the adjustment request';
     }
     if (target.transaction?.loan_id) {
       const [later] = await tx.$queryRaw<any[]>`
         SELECT id FROM "financial_transactions"
         WHERE "tenantId" = ${tenantId} AND "loanId" = ${target.transaction.loan_id}
-          AND "postedAt" > ${target.transaction.posted_at || target.transaction.created_at}
+          AND ("postedAt", id) > (
+            ${target.transaction.posted_at || target.transaction.created_at},
+            ${target.transaction.id}
+          )
           AND "adjustmentRequestId" IS NULL
         LIMIT 1
       `;
@@ -953,7 +962,7 @@ export class FinancialAdjustmentsService {
     request: FinancialAdjustmentRecord,
     target: ResolvedTarget,
   ): Promise<string | undefined> {
-    if (target.loan && request.expectedLoanVersion !== Number(target.loan.version)) {
+    if (target.loan && request.expectedLoanVersion !== undefined && request.expectedLoanVersion !== Number(target.loan.version)) {
       return 'Loan state changed after the adjustment request';
     }
     if (target.transaction?.loan_id) {
@@ -961,7 +970,11 @@ export class FinancialAdjustmentsService {
       const later = (await this.store.listTransactions(tenantId)).some((transaction) =>
         transaction.loan_id === target.transaction!.loan_id
         && !transaction.adjustment_request_id
-        && (transaction.posted_at || transaction.created_at) > targetAt);
+        && (
+          (transaction.posted_at || transaction.created_at) > targetAt
+          || ((transaction.posted_at || transaction.created_at).valueOf() === targetAt.valueOf()
+            && transaction.id > target.transaction!.id)
+        ));
       if (later) return 'Loan has later financial effects; adjust the latest transaction first';
     }
     const accountConflict = await this.memoryAccountConflict(tenantId, request, target);
@@ -1214,7 +1227,12 @@ export class FinancialAdjustmentsService {
     for (const line of lines) {
       const debit = new Decimal(line.debit_amount || 0);
       const credit = new Decimal(line.credit_amount || 0);
-      if ((!debit.isZero() && !credit.isZero()) || (debit.isZero() && credit.isZero()) || debit.isNegative() || credit.isNegative()) {
+      if (
+        (!debit.isZero() && !credit.isZero())
+        || (debit.isZero() && credit.isZero())
+        || debit.isNegative()
+        || credit.isNegative()
+      ) {
         throw new BadRequestException('Each ledger line must contain exactly one positive debit or credit');
       }
       debits = debits.plus(debit);
